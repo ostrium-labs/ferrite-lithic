@@ -192,3 +192,73 @@ fn two_harnesses_for_the_same_module_do_not_share_a_directory() {
         );
     }
 }
+
+/// A port named after a C++ keyword, driven by the generated driver.
+///
+/// `char` is legal Verilog and illegal C++, and the generated driver assigns
+/// `dut->char`. Verilator names the class member from the Verilog name verbatim, so
+/// the driver cannot rename its way out of it — the emitter has to escape the name,
+/// and `Plan::of` has to agree about the spelling. Both used to be unchecked by
+/// anything, and the failure appeared as a C++ syntax error two crates away, in a
+/// generated file, about a port name nobody thought of as a keyword in the language
+/// being emitted.
+#[test]
+fn a_port_named_after_a_cxx_keyword_drives_and_simulates() {
+    let Some(verilator) = verilator() else {
+        println!("SKIPPED: verilator not found, so the cxx-keyword port did not run.");
+        return;
+    };
+    println!(
+        "cosimulating a port named `char` with {}",
+        verilator.display()
+    );
+
+    let d = Design::new();
+    let value = d.input("char", 8).unwrap();
+    let doubled = d.add(&value, &value).unwrap();
+    d.output("char_echo", doubled.width(), &doubled).unwrap();
+    let module = ferrite_lithic_rtl::Module::combinational(
+        "cxx_keyword",
+        d.build().unwrap(),
+        d.input_ports().iter().map(|s| s.id()).collect(),
+        d.output_ports().iter().map(|s| s.id()).collect(),
+    );
+
+    let verilog = module.emit().unwrap();
+    assert!(
+        verilog.contains("input  wire [7:0] char_"),
+        "the emitter escapes it: {verilog}"
+    );
+
+    let plan = Plan::of(&d, &module).unwrap();
+    assert_eq!(
+        plan.inputs
+            .iter()
+            .map(|p| p.verilog.as_str())
+            .collect::<Vec<_>>(),
+        ["char_"],
+        "and the plan gives the driver the escaped spelling"
+    );
+    assert_eq!(
+        plan.inputs
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["char"],
+        "while the simulator keeps the design's own name"
+    );
+
+    let mut stimulus = Stimulus::new();
+    for byte in 0..=255u64 {
+        stimulus
+            .push(vec![Bits::constant(byte, 8).unwrap()])
+            .unwrap();
+    }
+    let harness = Harness::build(&plan, &verilog, &plan.work_dir()).unwrap();
+    let report = ferrite_lithic_cosim::run_with(&d, &plan, &stimulus, &harness).unwrap();
+    assert!(
+        report.is_equivalent(),
+        "the two backends disagree: {report}\nfirst: {:?}",
+        report.first()
+    );
+}

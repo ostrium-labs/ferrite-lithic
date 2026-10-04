@@ -54,6 +54,19 @@ use crate::module::{Direction, Module, PortNames};
 /// Verilog-2001 reserved words, plus the SystemVerilog-2005 core that every tool
 /// in this project accepts.
 ///
+/// **C++ keywords are on this list too**, and that is not a mistake of scope.
+/// `char`, `class`, `delete`, `new`, `template`, `this`, `operator`, `register` and
+/// `xor` are all legal Verilog identifiers and all illegal C++ ones. The cosimulator
+/// generates a C++ driver that assigns `dut-><port name>`, and Verilator generates the
+/// class member from the Verilog name verbatim -- so a port called `char` produces a
+/// member called `char` and the driver will not compile. It surfaces two crates away,
+/// as a C++ syntax error pointing at a generated file, about a port name nobody
+/// thought of as a keyword in the language being emitted.
+///
+/// The alternative is to rename in the driver, which cannot work: the driver's name
+/// has to match the member Verilator generated, and Verilator's name is the Verilog
+/// one. So the escaping has to happen where the name is chosen.
+///
 /// The comparison is case-insensitive, which is stricter than Verilog: `INPUT` is
 /// a legal identifier in a case-sensitive language. Reserving it costs a design
 /// nothing (a signal named `input` becomes `input_`, which it can reach anyway by
@@ -62,12 +75,12 @@ use crate::module::{Direction, Module, PortNames};
 const RESERVED: &[&str] = &[
     "alias",
     "always",
-    "assume",
     "always_comb",
     "always_ff",
     "always_latch",
     "and",
     "assign",
+    "assume",
     "automatic",
     "before",
     "begin",
@@ -77,20 +90,23 @@ const RESERVED: &[&str] = &[
     "bit",
     "break",
     "buf",
-    "byte",
     "bufif0",
     "bufif1",
+    "byte",
     "case",
     "casex",
     "casez",
+    "catch",
     "cell",
     "chandle",
+    "char",
     "checker",
     "class",
     "clocking",
     "cmos",
     "config",
     "const",
+    "constexpr",
     "constraint",
     "context",
     "continue",
@@ -99,8 +115,10 @@ const RESERVED: &[&str] = &[
     "coverpoint",
     "cross",
     "deassign",
+    "decltype",
     "default",
     "defparam",
+    "delete",
     "design",
     "disable",
     "dist",
@@ -122,13 +140,14 @@ const RESERVED: &[&str] = &[
     "endprimitive",
     "endprogram",
     "endproperty",
-    "endspecify",
     "endsequence",
+    "endspecify",
     "endtable",
     "endtask",
     "enum",
     "event",
     "expect",
+    "explicit",
     "export",
     "extends",
     "extern",
@@ -140,6 +159,7 @@ const RESERVED: &[&str] = &[
     "forever",
     "fork",
     "forkjoin",
+    "friend",
     "function",
     "generate",
     "genvar",
@@ -182,18 +202,22 @@ const RESERVED: &[&str] = &[
     "medium",
     "modport",
     "module",
+    "mutable",
+    "namespace",
     "nand",
     "negedge",
     "nettype",
     "new",
     "nexttime",
     "nmos",
+    "noexcept",
     "nor",
     "noshowcancelled",
     "not",
     "notif0",
     "notif1",
     "null",
+    "operator",
     "or",
     "output",
     "package",
@@ -221,7 +245,9 @@ const RESERVED: &[&str] = &[
     "real",
     "realtime",
     "ref",
+    "register",
     "reg",
+    "reinterpret_cast",
     "reject_on",
     "release",
     "repeat",
@@ -249,6 +275,7 @@ const RESERVED: &[&str] = &[
     "specify",
     "specparam",
     "static",
+    "static_cast",
     "string",
     "strong",
     "strong0",
@@ -262,6 +289,7 @@ const RESERVED: &[&str] = &[
     "table",
     "tagged",
     "task",
+    "template",
     "this",
     "throughout",
     "throw",
@@ -279,6 +307,7 @@ const RESERVED: &[&str] = &[
     "trireg",
     "type",
     "typedef",
+    "typename",
     "union",
     "unique",
     "unique0",
@@ -714,6 +743,41 @@ mod tests {
             "xor",
         ] {
             assert!(is_reserved(word), "`{word}` is not in the reserved list");
+        }
+    }
+
+    #[test]
+    fn cxx_keywords_are_reserved_because_the_cosimulator_generates_cxx() {
+        // `char` is a legal Verilog identifier and an illegal C++ one, and the
+        // cosimulator generates a driver that assigns `dut->char`. Verilator names the
+        // class member from the Verilog name verbatim, so the driver cannot rename its
+        // way out of it: the escaping has to happen where the name is chosen.
+        //
+        // Found by base64, whose natural port name for "one ASCII character" is
+        // `char`. It surfaced as a C++ syntax error two crates away, in a generated
+        // file, about a port name nobody thought of as a keyword in the language
+        // being emitted -- the same shape as `byte` missing from this list, in the
+        // other language.
+        for word in [
+            "char",
+            "class",
+            "delete",
+            "explicit",
+            "friend",
+            "mutable",
+            "namespace",
+            "new",
+            "noexcept",
+            "operator",
+            "register",
+            "reinterpret_cast",
+            "static_cast",
+            "template",
+            "this",
+            "typename",
+        ] {
+            assert!(is_reserved(word), "`{word}` is not in the reserved list");
+            assert_eq!(legalise(word), format!("{word}_"), "and is escaped");
         }
     }
 

@@ -78,7 +78,6 @@ use ferrite_lithic::{Design, Signal};
 use ferrite_lithic_derive::PortList;
 
 use crate::BuildError;
-use crate::lfsr::reflected_tap;
 
 /// The reflected tap for CRC-3/ROTD, as three bits.
 ///

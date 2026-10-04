@@ -891,13 +891,97 @@ emitted ones from the emitter itself rather than recomputing them — because tw
 whose names both legalise to `a_b` come out as `a_b` and `a_b_1`, and no function of
 a single name can predict that suffix.
 
+### What the next six designs found
+
+`crc32`, `hex`, `base64`, `sha256`, `aes`, `chacha20` and `ghash` went in, and the
+finding was the same one every time: **the next design finds a toolchain defect that
+the previous test count did not.** That is now a pattern rather than a surprise, and
+it is the strongest argument this project has for the corpus crate existing at all.
+
+**The emitter produced invalid SystemVerilog for a part-select of a literal.**
+Constants are inlined wherever they are used, and a resize is lowered to a
+concatenation with a constant, so an operand is very often a literal rather than a
+wire — which made `Select` the one operation whose output depended on its operand
+being a wire. Every shift, truncate, slice or extension of a constant emitted
+`32'h510e527f[6 +: 26]`, which does not parse.
+
+The simulator evaluated the same nodes correctly throughout, so the two backends
+agreed on the *value* and disagreed about whether the output was Verilog at all. That
+is the worst possible way for them to disagree: the failure surfaces at elaboration,
+in a generated file nobody reads, about an operation three layers below the one that
+was written. Found by SHA-256, where the IV is a constant and shifting it is the
+obvious way to build the initial round state — and avoided there only by accident,
+because that design happened to route the IV through a mux instead.
+
+**The cosimulator could not drive a module that declares a clock but has no
+register.** `Program::clock` comes from the register nodes, so a combinational core
+with a clock on its interface — a normal shape, because a testbench drives the clock
+whatever else the design contains — got `NoClock` from the simulator while Verilator
+ran it happily. It now settles, which is what the generated driver and
+`ferrite-lithic-tb` already did.
+
+**`Plan::work_dir()` was keyed only by module name.** Anything cosimulating the same
+top module shared `dut.v`, `main.cpp`, `obj/` and `stimulus.txt`. Two builds in one
+process could hand one test another's stimulus, and `is_equivalent()` would answer
+about it — the failure being that it answers *plausibly* about the wrong data. Found
+by AES, whose cosim is slow enough that four copies of it run at once.
+
+**Verilator's `--build -j 0` intermittently aborts** at teardown with `Internal Error:
+attempted to destroy locked Thread Pool` on a fourteen-core machine. Serialising every
+invocation with a lock did not stop it, so it is not our contention; a fixed job count
+does. Recorded as a guess with evidence rather than a diagnosed cause, because it took
+three clean runs and one failure to attribute — which is exactly the kind of thing that
+gets misfiled as flakiness if nobody writes it down.
+
+**And one missing primitive, found by a design that wanted it.** A CRC consumes a byte
+on *every* edge, so asserting `init` needs an edge of its own and deasserting it must
+not spend a cycle — which `drive` (set an input, take an edge) cannot express, so the
+message acquired a spurious leading byte. CRC-3 did not expose this, because zero
+bytes happen to be neutral from a zero state; CRC-32's all-ones init is not neutral,
+and the difference surfaced as a wrong answer in a differential that had no business
+being wrong. `Handle::set` now applies an input and takes no edge.
+
+### The algorithms themselves
+
+Nine designs so far. What each one is *for*, in the hardware sense, is the interesting
+part, and the reasons are not all the same:
+
+- **CRC-3 and CRC-32** — 3 and 32 flops and two conditional XORs, a byte per clock,
+  against a software table lookup of 256 entries. `crc32fast`'s 8 kB of lookup is
+  precisely the thing the hardware does not have to pay for.
+- **SHA-256** — 64 unrolled rounds, no ROM, one block per cycle. Its dependency chain
+  is perfectly serial, which is exactly the case SIMD cannot help for a single message.
+- **ChaCha20** — the counterexample to "ROM-heavy ciphers are the ASIC ones". No tables
+  at all, just 32-bit adders and rotators, so one block per cycle for pure ALU.
+- **AES** — the opposite case, and the one where the S-box ROM is the whole design.
+  There is still no initialised-memory node in the IR, so the S-box is 200 duplicated
+  256-entry `case_` arms where real silicon would share one block RAM. That gap is
+  recorded rather than hidden, because it also blocks the DFA, the Aho-Corasick table
+  and every Huffman decode table.
+- **GHASH** — the most ASIC-shaped thing in the corpus and the one with no SIMD path
+  whatsoever: a CPU does it with carryless multiply over limbs, the hardware is 128
+  cycles of a register and two conditional XORs.
+- **hex and base64** — LUTs. Included because they are the tier that validates the
+  toolchain cheaply, and because a nibble or sextet table is the smallest honest test of
+  whether a ROM lowers correctly.
+
 ### What is still not covered
 
-Every algorithm beyond CRC-3 is not written. The corpus has one entry, chosen
-because it is the smallest design that is genuinely streaming, and the ladder from
-there — `crc32fast`, `sha2`, `aes`, `chacha20`, `ghash`, `blake3`, then `memchr` and
-`aho-corasick` and a regex DFA as a ROM plus a state register, then the
-data-infrastructure kernels — is the next thing.
+The rest of the ladder is in flight: `memchr` as the fair SIMD baseline,
+`aho-corasick` and a regex DFA as a transition table plus a state register, the
+columnar decode kernels (bit-unpacking, RLE, delta, dictionary), `roaring`, the three
+sketches, Hamming distance plus top-k over a sorting network, the entropy decoders
+(Huffman, FSE, the DEFLATE bit layer), a fixed-size FFT, header parsing at line rate,
+and BLAKE3 as a tree hash.
+
+The honest gap, and it is a real one: **there is no initialised-memory node in the
+IR.** `Design::mem` is zero-filled in both backends and the simulator's
+initialise-to-value refuses it, so every lookup table in the corpus is a `case_` or a
+mux tree. That is fine for AES's S-box, which is genuinely small, and it is a lie for
+a regex DFA, a Huffman decode table or a 256-entry nibble LUT — those are block RAM in
+silicon and a multiplexer tree here. It is the single highest-value addition left to
+the toolchain, and it is the reason the DFA and entropy-coding entries will document a
+cost that a real design would not pay.
 
 The corpus is also the first thing in this project that has needed the golden model
 to be a *different crate*. `crc3fast` is not in the registry index, so the golden
