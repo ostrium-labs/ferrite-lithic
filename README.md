@@ -9,11 +9,11 @@ transpiler from another language: a Rust library you call from Rust.
 Status
 ------
 
-**Phase A1, in progress.** `ferrite-lithic-bits` is implemented and tested; the
-rest of the crate split below is the intended shape. The design notes that settle
-the IR, the simulator's execution model, and the Verilog emitter's contract are in
-`docs/design-notes.md`, and `DETAILS.md` is the single place everything known
-lives.
+**Phase A1, in progress.** `ferrite-lithic-bits` and `ferrite-lithic-ir` are
+implemented and tested; the rest of the crate split below is the intended shape.
+The design notes that settle the simulator's execution model and the Verilog
+emitter's contract are in `docs/design-notes.md`, and `DETAILS.md` is the single
+place everything known lives.
 
 ### `ferrite-lithic-bits`
 
@@ -22,18 +22,20 @@ Fixed-width bitvectors over `u64` words, with runtime widths.
 ```rust
 use ferrite_lithic_bits::Bits;
 
-let a = Bits::constant(0xff, 8)?;
-let b = Bits::constant(0x01, 8)?;
+let a = Bits::constant(0xff, 8).unwrap();
+let b = Bits::constant(0x01, 8).unwrap();
 
 // `add` gives back exactly the 8 bits asked for, and drops the carry.
-assert_eq!(a.add(&b)?.to_u64()?, 0x00);
+assert_eq!(a.add(&b).unwrap().to_u64().unwrap(), 0x00);
 
 // `mul` widens, so nothing is lost.
-let product = a.mul(&b)?;
+let product = a.mul(&b).unwrap();
 assert_eq!(product.width(), 16);
-assert_eq!(product.to_u64()?, 0x00ff);
-# Ok::<(), ferrite_lithic_bits::Error>(())
+assert_eq!(product.to_u64().unwrap(), 0x00ff);
 ```
+
+Operations take `&self` and return `Result`, so they chain; the `?` is elided
+here for readability.
 
 Widths are runtime values, so a width mismatch is a runtime error rather than a
 compile error. The error message therefore names both operand widths and the
@@ -59,10 +61,78 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-95 tests, in four layers: unit tests, doctests, property tests against a
+107 tests in `ferrite-lithic-ir`, and 95 in `ferrite-lithic-bits`. The bits crate
+runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
-"operands must span two words" assumption inherited from upstream.
+"operands must span two words" assumption inherited from upstream. The IR crate
+runs the cycle claims from the research as named tests, plus property tests that
+check every width against an independent recomputation and every topological
+order against its own definition.
+
+### `ferrite-lithic-ir`
+
+The signal graph: an arena of nodes whose identity is the arena index, and the
+only place a feedback loop can come from.
+
+```rust
+use ferrite_lithic_bits::Bits;
+use ferrite_lithic_ir::{Circuit, Deps};
+
+let mut c = Circuit::new();
+
+// An undriven wire, built first so logic can read it before it has a driver.
+// `Wire` is the only mutable node in the graph, which is what makes a loop
+// expressible at all in a bottom-up IR.
+let acc = c.wire(8).unwrap();
+let one = c.constant(Bits::constant(1, 8).unwrap());
+let clk = c.constant(Bits::constant(0, 1).unwrap());
+
+let incremented = c.add(acc, one).unwrap();
+let next = c.reg(incremented, clk, clk, clk).unwrap(); // a register's output is the node itself
+c.drive(acc, next).unwrap(); // close the loop
+
+// Legal: a register is terminal for combinational loop checking, so feedback
+// through one is an ordinary accumulator rather than a cycle.
+c.topological_order(Deps::LoopChecking).unwrap();
+```
+
+Constructors take `&mut self` and return `Result`, so a call cannot be nested
+inside another (`c.add(a, c.constant(..))` will not borrow-check); build operands
+into locals first. The DSL crate exists to hide that.
+
+Three inherited decisions do the work, and each is a test:
+
+| Decision | Consequence |
+|---|---|
+| A register stores no output value | "is this stateful?" is one constructor match, not a flag |
+| `Wire` is the only mutable node | a feedback loop has exactly one possible back edge |
+| Memories hold write ports; read ports are separate nodes | a read port is never a hidden source of state |
+
+**Node ids are arena indices, so naming needs no normalisation pass.** Hardcaml
+gives nodes identity from a process-global mutable counter, and needs
+`normalize_uids` to make output reproducible — which it ships **off by default,
+with its own test commented out as "brittle"**
+(`test/lib/test_uid_normalization.ml:56-59`). Here, construction order *is* the
+canonical order, so byte-identical Verilog is structural rather than something to
+defend with a pass. `tests/ordering.rs` asserts that a bottom-up build is already
+in evaluation order, and that two circuits can be built on two threads at once.
+
+**Three dependency relations, not one**, as an enum parameter rather than a trait
+object so the cases stay monomorphised (`src/signal_graph.ml:258-325`). The
+difference is observable, and the memory pair is the one that is easy to get
+backwards:
+
+| Relation | `Reg` | `Mem` | `Instance` |
+|---|---|---|---|
+| `LoopChecking` | terminal | terminal | terminal |
+| `SimulationScheduling` | terminal | terminal | followed |
+| `WithoutCaseMatches` | followed | followed | followed |
+
+So a loop **through a register** is legal, a loop **into a memory write port** is
+legal, and a loop **through a memory read port** is not. All three hold for the
+same reason: read ports are ordinary combinational nodes while the memory itself
+is a terminal.
 
 Crate layout
 ------------
@@ -70,7 +140,7 @@ Crate layout
 | Crate | Purpose | Phase |
 |---|---|---|
 | `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
-| `ferrite-lithic-ir` | Signal graph: arena of nodes, `NodeId` indices, wires resolved after construction so cycles are legal | A1 |
+| `ferrite-lithic-ir` | Signal graph: arena of nodes, `NodeId` indices, wires resolved after construction so cycles are legal | A1 **done** |
 | `ferrite-lithic` | Front-end DSL: `Signal` handle with operator overloads and builder functions | A1 |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |

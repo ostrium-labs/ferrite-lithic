@@ -7,9 +7,10 @@ Everything known about this project in one place. Companion documents:
 - `docs/adr/` — 17 accepted architecture decision records
 - `../ferrite-strata/DETAILS.md` — the companion runtime
 
-Status: **Phase A1 in progress.** `ferrite-lithic-bits` is implemented, documented
-and tested (95 tests); the remaining A1 crates — `-ir`, the DSL front end, `-sim`
-and `-rtl` — are not yet written. Nothing is published to crates.io yet.
+Status: **Phase A1 in progress.** `ferrite-lithic-bits` and `ferrite-lithic-ir` are
+implemented, documented and tested (202 tests); the remaining A1 crates — the DSL
+front end, `-sim` and `-rtl` — are not yet written. Nothing is published to
+crates.io yet.
 
 ## 1. What it is
 
@@ -40,7 +41,8 @@ written to be extended if code or vectors are ever derived rather than rewritten
 | Crate | Purpose | Phase |
 |---|---|---|
 | `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
-| `ferrite-lithic-ir` | Arena of nodes with `NodeId`, wires resolved after construction | A1 |
+| `ferrite-lithic-ir` | Arena of nodes with `NodeId`, wires resolved after construction | A1 **done** |
+| `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 |
 | `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
@@ -83,6 +85,49 @@ recording because each one was invisible to the layer below it:
 The lesson is the same one §5 records about Hardcaml's multiply: **at these
 widths, assuming a word boundary is an assumption.** The exhaustive layer exists
 because random sampling found none of the first three.
+
+### What `ferrite-lithic-ir` actually does
+
+Written to §4 above rather than to the plan, and the arena turned out to be
+forced rather than convenient: Hardcaml has no arena and no ids at construction
+time, and a plain immutable Rust tree cannot express a feedback loop at all. So
+nodes live in a `Vec`, `NodeId` is an index, and `Wire` is the only node with a
+mutable field (`Cell<Option<NodeId>>`) — which is the only possible back edge,
+and therefore the only way a cycle can exist.
+
+**The three dependency relations are implemented as written, and the memory cases
+reconcile.** The design notes record that a loop through a register is legal
+(`test_combinational_loop.ml:152-182`), a loop through a memory read port is not
+(`:243-268`), and a loop into a memory write port is (`:270-313`). Those looked
+contradictory until the read/write split explains them: a read port is an ordinary
+combinational node, so the offending cycle `read port → address logic → read port`
+is caught by every relation, while the memory itself is terminal for loop checking
+and so the write port's feedback path is not. `tests/cycles.rs` asserts all three
+from the graph rather than taking the reading on trust.
+
+**Two real bugs, both found by tests that were written to be awkward on purpose.**
+
+| Bug | Symptom | Caught by |
+|---|---|---|
+| `Mem` was treated as a leaf in the operand list | No dependency through a memory existed under *any* relation, so `WithoutCaseMatches` silently reported no cycle where one existed, and `check` could not see a dangling write-port signal | `a_loop_into_a_memory_write_port_is_legal`, which asserts the relation differs |
+| `check`'s "is this wire read by anything" test was inverted | It reported exactly the wires nobody read and passed on the ones something read from | two opposite tests, which is the only reason it was caught |
+
+Both are the same shape as the bits-crate bugs: a plausible-looking `match` arm
+that was quietly wrong. The mitigations that found them were cheap and are now
+permanent — assert a relation *differs* rather than only that it succeeds, and
+write the positive and negative case of every predicate next to each other.
+
+**Two claims are recorded as unproven rather than assumed.** `Deps`'s
+`Case` match-constant row is **inert in A1**: our cases match against `Bits`
+literals, so there are no match-constant edges to follow or drop, and
+`includes_case_matches` cannot change any result. It is kept because dropping the
+dimension now would mean revisiting every call site if match constants ever become
+signals. And `Node::Instance` produces a **single output**, which is an A1
+limitation rather than a design position — a submodule returning several signals
+needs a bundle type, and the bundle design is not settled. Single output is enough
+to make the node kind real, and `Instance` is the only kind the loop-checking and
+simulation-scheduling relations disagree about, so without it the three-way enum
+would have had a redundant variant.
 
 ## 4. Design, and where it came from
 

@@ -1,0 +1,18 @@
+[package]
+name = "ferrite-lithic-ir"
+description = "The signal graph for the Ferrite Lithic hardware DSL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-lithic-bits.workspace = true
+
+[dev-dependencies]
+proptest = "1.11"

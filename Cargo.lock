@@ -61,6 +61,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrite-lithic-ir"
+version = "0.0.1"
+dependencies = [
+ "ferrite-lithic-bits",
+ "proptest",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
