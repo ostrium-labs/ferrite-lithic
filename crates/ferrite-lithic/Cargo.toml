@@ -16,6 +16,8 @@ ferrite-lithic-bits.workspace = true
 ferrite-lithic-ir.workspace = true
 
 [dev-dependencies]
+ferrite-lithic-bits = { path = "../ferrite-lithic-bits", version = "0.0.1" }
 ferrite-lithic-derive = { path = "../ferrite-lithic-derive", version = "0.0.1" }
 ferrite-lithic-rtl = { path = "../ferrite-lithic-rtl", version = "0.0.1" }
+ferrite-lithic-sim = { path = "../ferrite-lithic-sim", version = "0.0.1" }
 proptest = "1.11"

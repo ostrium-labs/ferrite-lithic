@@ -4,6 +4,8 @@
 #![allow(clippy::unwrap_used)]
 
 use ferrite_lithic::{Design, Error};
+use ferrite_lithic_bits::Bits;
+use ferrite_lithic_sim::Sim;
 
 #[test]
 fn a_call_can_be_nested_inside_another() {
@@ -434,4 +436,60 @@ fn a_literal_beyond_64_bits_truncates_the_value_and_that_is_stated() {
     assert_eq!(wide.width(), 128);
     let narrow = d.lit(0xffff_ffff, 4).unwrap();
     assert_eq!(narrow.width(), 4);
+}
+
+/// A lookup table is a multiplexer tree here, and that is stated in its docs.
+///
+/// `Design::rom` exists because every table in the design corpus was being written
+/// out as 16 or 256 explicit `case_` arms, which is correct and unreadable. The
+/// important part is not the convenience: it is that the cost is now written down in
+/// one place instead of being rediscovered per design. There is no initialised-memory
+/// node in the IR, so this is a `case`, and in silicon a big one would be a block RAM.
+#[test]
+fn a_lookup_table_indexes_its_entries() {
+    let d = Design::new();
+    // The AES-style nibble-to-ASCII table, which `hex` and `base64` both need.
+    let table: Vec<u64> = (0..16u64)
+        .map(|n| n + if n < 10 { 0x30 } else { 0x57 })
+        .collect();
+    let address = d.input("n", 4).unwrap();
+    let ascii = d.rom(&address, &table, 8).unwrap();
+    d.output("ascii", 8, &ascii).unwrap();
+    let mut sim = Sim::new(&d).unwrap();
+    for nibble in 0..16u64 {
+        sim.set_input("n", Bits::constant(nibble, 4).unwrap())
+            .unwrap();
+        sim.comb().unwrap();
+        assert_eq!(
+            sim.peek("ascii").unwrap().to_u64().unwrap(),
+            table[nibble as usize],
+            "nibble {nibble:x}"
+        );
+    }
+}
+
+#[test]
+fn a_lookup_table_refuses_an_address_of_the_wrong_width() {
+    let d = Design::new();
+    let table = [0u64, 1, 2, 3];
+    // Four entries need a two-bit address.
+    let too_narrow = d.input("a", 1).unwrap();
+    let error = d.rom(&too_narrow, &table, 8).unwrap_err();
+    assert!(error.to_string().contains("needs a width of 2"), "{error}");
+
+    // And a wider address is refused rather than truncated: truncating would make the
+    // table reachable at two different addresses, which is a silent aliasing bug.
+    let too_wide = d.input("b", 3).unwrap();
+    let error = d.rom(&too_wide, &table, 8).unwrap_err();
+    assert!(error.to_string().contains("needs a width of 2"), "{error}");
+}
+
+#[test]
+fn a_lookup_table_refuses_a_length_that_is_not_a_power_of_two() {
+    let d = Design::new();
+    let address = d.input("a", 3).unwrap();
+    // Three entries cannot be addressed by three bits without an out-of-range case,
+    // and a default arm would silently alias two addresses to one value.
+    let error = d.rom(&address, &[1, 2, 3], 8).unwrap_err();
+    assert!(error.to_string().contains("`rom`"), "{error}");
 }

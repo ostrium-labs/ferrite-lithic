@@ -284,6 +284,7 @@ dependencies = [
  "ferrite-lithic-derive",
  "ferrite-lithic-ir",
  "ferrite-lithic-rtl",
+ "ferrite-lithic-sim",
  "proptest",
 ]
 

@@ -20,6 +20,15 @@ pub enum Error {
     Bits(ferrite_lithic_bits::Error),
     /// The graph operation was rejected.
     Ir(IrError),
+    /// A width was wrong for the operation being built.
+    Width {
+        /// What was being built, in the form the caller wrote it.
+        op: &'static str,
+        /// The width the operation requires.
+        expected: u32,
+        /// The width it was given.
+        got: u32,
+    },
     /// A signal from one design was used in another without being adopted.
     ForeignSignal {
         /// The arena the signal actually belongs to.
@@ -54,6 +63,10 @@ impl fmt::Display for Error {
         match self {
             Self::Bits(inner) => write!(f, "{inner}"),
             Self::Ir(inner) => write!(f, "{inner}"),
+            Self::Width { op, expected, got } => write!(
+                f,
+                "`{op}` needs a width of {expected}, but it was given {got}."
+            ),
             Self::ForeignSignal {
                 belongs_to,
                 used_in,
@@ -712,6 +725,71 @@ impl Design {
             self.zeros(new_width - value.width)?
         };
         self.concat(&[fill, low])
+    }
+
+    /// A combinational lookup table: `table[address]` for a `log2(len)`-bit address.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Width`] if the table's length is not a power of two, if the address is
+    /// not exactly `log2(len)` bits wide, or if an entry does not fit `value_width`.
+    ///
+    /// # What this costs, honestly
+    ///
+    /// **A multiplexer tree, not a memory.** That is the important caveat and it is
+    /// the reason this function's doc is longer than its body.
+    ///
+    /// The IR has no initialised-memory node: [`Design::mem`] is zero-filled in both
+    /// backends and the simulator's initialise-to-value refuses it, so there is no way
+    /// to say "these are the contents". This therefore builds the same node graph a
+    /// human would write with [`Design::case_`], one arm per entry, and the emitted
+    /// Verilog is an `always @* case`.
+    ///
+    /// In silicon that is a very different thing from a table. A 256-entry × 8-bit
+    /// lookup is one read port on a block RAM: a handful of gates, one cycle, fixed.
+    /// As a multiplexer tree it is a 256-to-1 mux per output bit — deep, slow, and
+    /// exactly what a synthesis tool exists to replace. So:
+    ///
+    /// - For a *small* table (a nibble or sextet LUT, an AES S-box, a short jump
+    ///   table) this is close enough to the truth that using it is fine.
+    /// - For a *large* one (a regex DFA transition table, a Huffman decode table, a
+    ///   256-entry alphabet map) this is a mux tree, and a real design would infer
+    ///   block RAM. Any design that uses it for a large table should say so.
+    ///
+    /// The honest fix is an initialised-memory node in the IR, which needs a contents
+    /// payload in `Node::Mem`, honouring it in the simulator's reset state, and an
+    /// `initial` block in the emitter. Until then this is the idiom, and the cost is
+    /// written down rather than left for someone to discover in a netlist.
+    ///
+    /// The table is indexed by the address with no out-of-range case: the address
+    /// width is exactly `log2(len)`, so every value it can hold is in range. A wider
+    /// address is refused rather than truncated, because truncating it would make a
+    /// table silently reachable at two addresses.
+    pub fn rom(&self, address: &Signal, table: &[u64], value_width: u32) -> Result<Signal, Error> {
+        self.same_design(&[address])?;
+        if table.len() < 2 || !table.len().is_power_of_two() {
+            return Err(Error::Width {
+                op: "rom",
+                expected: 1,
+                got: table.len() as u32,
+            });
+        }
+        let wanted = table.len().trailing_zeros();
+        if address.width != wanted {
+            return Err(Error::Width {
+                op: "rom address",
+                expected: wanted,
+                got: address.width,
+            });
+        }
+        let mut arms = Vec::with_capacity(table.len());
+        for (index, entry) in table.iter().enumerate() {
+            let value = Bits::constant(*entry, value_width)?;
+            arms.push((index as u64, self.bits(value)));
+        }
+        // Unreachable given the width check above; the `case_` still needs one.
+        let default = self.lit(0, value_width)?;
+        self.case_(address, &arms, &default)
     }
 
     /// Shift left by a constant amount. Structural: select plus `cat`.
