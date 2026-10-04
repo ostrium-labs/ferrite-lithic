@@ -403,19 +403,22 @@ fn add32(design: &Design, left: &Signal, right: &Signal) -> Result<Signal, Build
 
 /// A 33-bit zero-extended copy of a 32-bit word.
 ///
-/// This is [`Design::zero_extend`] spelled out, and the reason it is spelled out is a
-/// defect in the Verilog emitter rather than a preference. `zero_extend` is a
-/// part-select of the low 32 bits followed by a `cat` with a zero pad, and
-/// `Node::Select` renders as `{operand}[{offset} +: {len}]` for every operand
-/// including a literal — so zero-extending one of this design's four constant words
-/// emits `assign w = 32'h61707865[0 +: 32];`, which is a syntax error in Verilog and
-/// stops Verilator dead. A part-select of a *net* is legal, which is why no other
-/// design in the corpus has hit it: this one is the first to widen a constant.
+/// This *was* [`Design::zero_extend`] spelled out to route around a defect in the
+/// Verilog emitter, and it is worth recording why because the shape of the bug was
+/// more interesting than the bug.
 ///
-/// The concat below emits `{1'h0, operand}` for a constant operand, is correct either
-/// way, and costs one node instead of two. Fixing the emitter to drop the select when
-/// it covers the operand whole — or to parenthesise the literal — would let this go
-/// back to `zero_extend`.
+/// `zero_extend` is a part-select of the low 32 bits followed by a `cat` with a zero
+/// pad, and `Node::Select` rendered as `{operand}[{offset} +: {len}]` for every
+/// operand — including a literal. So widening one of this design's four constant words
+/// emitted `assign w = 32'h61707865[0 +: 32];`, which is not Verilog. A part-select of
+/// a *net* is legal, which is why this design was the first in the corpus to notice:
+/// it is the first to widen a constant.
+///
+/// The emitter now evaluates a selection of a constant and emits a fresh literal, so
+/// `zero_extend` is correct again and this is no longer a workaround. What is left is
+/// a genuine one-node saving: a full-width select returns all its bits, so
+/// `{1'h0, operand}` is the same value with one node instead of two, and it is the
+/// same node a synthesis tool would fold away anyway.
 ///
 /// # Errors
 ///

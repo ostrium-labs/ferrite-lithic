@@ -57,6 +57,7 @@ pub mod fse;
 pub mod ghash;
 pub mod hamming;
 pub mod hex;
+pub mod huffman;
 pub mod lfsr;
 pub mod memchr;
 pub mod packet;

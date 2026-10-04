@@ -297,29 +297,21 @@ pub fn encode(design: &Design, byte: &Signal, phase: &Signal) -> Result<Signal, 
 
 /// The hex character for `nibble`: the 16-entry ROM.
 ///
-/// One `case_` arm per [`ALPHABET`] entry, addressed by the nibble itself. A
-/// `case_` and not a `design.mem` read, because a memory's contents are *written*
-/// and a ROM's are not: there is no write port to attach, no enable to tie, and no
-/// reset value to argue about. Sixteen literal arms say "this is a table" in a way
-/// that a memory declaration cannot.
+/// [`Design::rom`] rather than sixteen literal `case_` arms, which is what this was
+/// before that function existed. The arms were correct and said "this is a table" in a
+/// way a memory declaration could not -- there is no write port to attach, no enable to
+/// tie and no reset value to argue about, which is the real reason a `Design::mem` read
+/// is the wrong shape for a ROM. That reasoning now lives in one place instead of
+/// being restated in every design with a table in it.
 ///
-/// The default is [`ALPHABET`]'s first entry. It is unreachable -- `nibble` is four
-/// bits and all sixteen values are enumerated above -- but a `case_` needs one, and
-/// `Design::case_` will not build the node without it.
+/// Sixteen entries is also the size at which the multiplexer tree this lowers to is
+/// *not* worth worrying about. A 256-entry table is a different question, and
+/// `Design::rom`'s documentation is where that is answered.
 ///
 /// # Errors
 ///
 /// Whatever [`Design`] returns.
 pub fn nibble_to_ascii(design: &Design, nibble: &Signal) -> Result<Signal, BuildError> {
-    let arms = ALPHABET
-        .iter()
-        .enumerate()
-        .map(|(value, character)| {
-            design
-                .lit(u64::from(*character), 8)
-                .map(|lit| (value as u64, lit))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let default = design.lit(u64::from(ALPHABET[0]), 8)?;
-    Ok(design.case_(nibble, &arms, &default)?)
+    let table: Vec<u64> = ALPHABET.iter().map(|c| u64::from(*c)).collect();
+    Ok(design.rom(nibble, &table, 8)?)
 }
