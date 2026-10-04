@@ -26,6 +26,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use ferrite_lithic::{Design, Signal};
 use ferrite_lithic_bits::Bits;
@@ -310,6 +314,51 @@ pub fn verilator() -> Option<PathBuf> {
     }
 }
 
+/// How many compile jobs one Verilator build is given.
+///
+/// See the `--build` argument in [`Harness::build`]. `const` rather than a literal so
+/// a reader looking for the flaky `-j 0` finds one named thing rather than a number.
+const JOB_COUNT: &str = "4";
+
+/// Serialises Verilator invocations inside one process.
+///
+/// `cargo test` runs the tests in a binary in parallel threads, so several harnesses
+/// can be verilating at once, and `--build -j 0` gives each one every core. Verilator
+/// does not reliably survive that: it aborts with `Internal Error: attempted to
+/// destroy locked Thread Pool`, which is reproducible under load and absent when the
+/// builds are serialised.
+///
+/// It took three clean runs and one failure to attribute, so this is a guess with
+/// evidence rather than a diagnosed cause. It is cheap either way -- a Verilator build
+/// is seconds, and a test binary that spends them one after another instead of all at
+/// once is not slower in any way that matters. The lock is per process, so separate
+/// `cargo test` binaries and separate CI jobs still build in parallel.
+fn verilator_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    match LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        // A panic while holding the lock poisons it. The work it guards is Verilator
+        // output in a temp directory, and the alternative -- propagating the panic to
+        // every later cosim in the process -- is worse than re-running one.
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// A leaf directory name unique to this process and to this call.
+///
+/// The pid because the realistic collision is two `cargo test` binaries (or two CI
+/// jobs on one machine) building the same top module at once; the counter because
+/// two builds in one process are just as real, and just as capable of handing one
+/// test another test's stimulus.
+fn unique_leaf(top: &str) -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{top}-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
 /// The C++ driver for one plan.
 ///
 /// Read this to know what the harness does; it is short because the port list is
@@ -475,6 +524,19 @@ impl Harness {
     /// diagnostics if the build fails.
     pub fn build(plan: &Plan, verilog: &str, root: &Path) -> Result<Self, Error> {
         let verilator = verilator().ok_or(Error::NoVerilator)?;
+        let _serialised = verilator_lock();
+        // A fresh subdirectory per build, not a shared `root`.
+        //
+        // Two things live here that must not be shared between two harnesses being
+        // built at once: the Verilator object directory, and `stimulus.txt`, which
+        // `run` rewrites for every stimulus. Sharing `root` between two builds of the
+        // same module name — which is what `Plan::work_dir` used to hand out — means
+        // two processes verilating the same top module write the same `dut.v` and
+        // `main.cpp`, and then each runs the *other's* stimulus. The visible symptom
+        // is usually a permission error or a link failure, but the dangerous one is
+        // silent: `is_equivalent()` answering about a stimulus the caller never
+        // passed.
+        let root = &root.join(unique_leaf(&plan.top));
         std::fs::create_dir_all(root)?;
 
         let source = root.join("dut.v");
@@ -490,8 +552,21 @@ impl Harness {
             .arg("--cc")
             .arg("--exe")
             .arg("--build")
+            // A fixed job count, not `-j 0`.
+            //
+            // `-j 0` means every core, and on a fourteen-core machine Verilator
+            // intermittently aborts at teardown with `Internal Error: attempted to
+            // destroy locked Thread Pool`. It is not our contention -- serialising
+            // every invocation in the process with a lock did not stop it -- so it is
+            // Verilator's own thread pool failing to unwind, and the fix is not to ask
+            // for fourteen jobs to compile one generated file.
+            //
+            // Four is an arbitrary but defensible number: the generated C++ is small,
+            // so the parallelism that matters is across designs, which `cargo test`
+            // and the CI job already provide. One runs clean too, at roughly twice
+            // the wall clock.
             .arg("-j")
-            .arg("0")
+            .arg(JOB_COUNT)
             // Warnings are information here: a synthesiser's warning about an
             // unused bit is not a reason to refuse to check the design.
             .arg("-Wno-fatal")
@@ -530,6 +605,16 @@ impl Harness {
         })
     }
 
+    /// The directory this harness was built in.
+    ///
+    /// Exposed because it is the thing that has to be unique: two harnesses built
+    /// from the same plan must not share it, or they share `stimulus.txt` and one
+    /// test can be handed another's stimulus.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Runs the harness over a stimulus, returning each cycle's output values.
     ///
     /// # Errors
@@ -543,6 +628,11 @@ impl Harness {
         let path = self.root.join("stimulus.txt");
         std::fs::write(&path, encoded)?;
 
+        // The run itself is serialised too. `run` writes `stimulus.txt` into this
+        // harness's own directory, so two *runs* of the same harness cannot collide --
+        // but the C++ binary is a Verilator model, and the failure above is in
+        // Verilator's thread pool rather than in our files.
+        let _serialised = verilator_lock();
         let output = Command::new(&self.binary).arg(&path).output()?;
         if !output.status.success() {
             return Err(Error::Process {

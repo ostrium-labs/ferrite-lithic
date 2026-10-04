@@ -500,7 +500,11 @@ impl Emitter<'_> {
         };
         Ok(match node {
             Node::Not { arg } => format!("~{}", name(arg)?),
-            Node::Select { value, offset, len } => {
+            Node::Select {
+                value: operand,
+                offset,
+                len,
+            } => {
                 // `a[0 +: 0]` is not Verilog. `Circuit::select` refuses a zero
                 // length, so this only fires for a hand-built node.
                 if *len == 0 {
@@ -509,7 +513,25 @@ impl Emitter<'_> {
                         kind: node.kind(),
                     });
                 }
-                format!("{}[{offset} +: {len}]", name(value)?)
+                // **A part-select of a literal is not Verilog.** Constants are
+                // inlined wherever they are used -- a resize is lowered to a
+                // concatenation with a constant, so an operand is very often a
+                // literal rather than a wire -- and `32'h510e527f[6 +: 26]` does not
+                // parse. So when the operand is a constant the selection is evaluated
+                // here and emitted as a fresh literal of the selection's own width.
+                //
+                // This was found by SHA-256, where a shift or a truncate of the IV
+                // emits uncompilable Verilog while the simulator evaluates the same
+                // node correctly. The two backends agreed on the value and disagreed
+                // on whether the output was Verilog at all, which is the worst
+                // possible way for them to disagree: the failure surfaces at
+                // elaboration, in a file nobody reads, about an operation three
+                // layers below the one that was written.
+                if let Node::Constant { value } = self.circuit().get(*operand)? {
+                    let selected = value.select(*offset, *len).map_err(Error::Bits)?;
+                    return Ok(literal(&selected));
+                }
+                format!("{}[{offset} +: {len}]", name(operand)?)
             }
             Node::BitAnd { left, right } => bin(&name(left)?, "&", &name(right)?),
             Node::BitOr { left, right } => bin(&name(left)?, "|", &name(right)?),

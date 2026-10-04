@@ -123,9 +123,24 @@ pub fn simulate(
         // The *second* snapshot, which is what a Verilator read after the rising
         // edge sees. Comparing the first would put the two backends a register
         // update apart on every port that is one.
-        let (_before, after) = sim.step().map_err(|inner| Error::Sim(Box::new(inner)))?;
+        //
+        // A design with no register has no clock as far as `Sim` is concerned --
+        // `Program::clock` comes from the register nodes -- and yet the module may
+        // still *declare* one, and the generated driver will drive it and `eval()`
+        // it once per cycle. So for that shape a "cycle" here is a settle, which is
+        // what the generated driver does and what `ferrite-lithic-tb` does. Without
+        // this, a combinational core with a clock port on its interface -- which is
+        // a perfectly normal shape for something that is also driven by a testbench
+        // -- cannot be cosimulated at all, and the failure is `NoClock` on the
+        // simulator side while Verilator runs the design happily.
+        let settled = if sim.program().clock().is_some() {
+            sim.step().map_err(|inner| Error::Sim(Box::new(inner)))?.1
+        } else {
+            sim.comb().map_err(|inner| Error::Sim(Box::new(inner)))?;
+            sim.initial().map_err(|inner| Error::Sim(Box::new(inner)))?
+        };
         cycles.push(
-            after
+            settled
                 .outputs()
                 .iter()
                 .map(|(_, value)| value.clone())

@@ -90,12 +90,14 @@ use ferrite_lithic_bits::Bits;
 use ferrite_lithic_sim::Sim;
 use ferrite_lithic_wave::{Port as WavePort, WaveData};
 
-use crate::edge::{Drive, Edge, Pulse, Settle};
+use crate::edge::{Drive, Edge, Pulse, Set, Settle};
 
 mod edge;
 mod error;
 
-pub use crate::edge::{Drive as Step, Edge as StepEdge, Pulse as StepPulse, Settle as SettleOnly};
+pub use crate::edge::{
+    Drive as Step, Edge as StepEdge, Pulse as StepPulse, Set as StepSet, Settle as SettleOnly,
+};
 pub use crate::error::Error;
 
 /// The simulator, its port list, and the first recorded failure.
@@ -364,7 +366,13 @@ impl Handle {
     /// `u64` is checked against the design's actual port widths instead of being
     /// quietly truncated into whatever the value's own width happened to be.
     pub fn drive(&self, port: &str, value: u64) -> Drive {
-        let bits = match self.shared.width_of(port) {
+        let bits = self.resolve(port, value);
+        Drive::new(Rc::clone(&self.shared), port.to_string(), bits)
+    }
+
+    /// Resolves a `u64` against a port's declared width, recording any failure.
+    fn resolve(&self, port: &str, value: u64) -> Option<Bits> {
+        match self.shared.width_of(port) {
             None => {
                 self.shared.fail(self.shared.unknown(port));
                 None
@@ -398,8 +406,21 @@ impl Handle {
                     None
                 }
             },
-        };
-        Drive::new(Rc::clone(&self.shared), port.to_string(), bits)
+        }
+    }
+
+    /// Applies an input value and takes **no** edge.
+    ///
+    /// For a one-shot control input: see [`crate::edge::Set`] for why a design with an
+    /// `init` needs this and cannot be driven correctly with [`Handle::drive`] alone.
+    pub fn set(&self, port: &str, value: u64) -> Set {
+        let handle_bits = self.resolve(port, value);
+        Set::new(Rc::clone(&self.shared), port.to_string(), handle_bits)
+    }
+
+    /// [`Handle::set`] for a value of an explicit width.
+    pub fn set_bits(&self, port: &str, value: Bits) -> Set {
+        Set::new(Rc::clone(&self.shared), port.to_string(), Some(value))
     }
 
     /// Applies an input value of an explicit width and takes one rising edge.

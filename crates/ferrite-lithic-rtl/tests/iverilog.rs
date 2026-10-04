@@ -338,3 +338,163 @@ fn the_emitted_verilog_parses() {
     }
     assert!(failures.is_empty(), "\n{}", failures.join("\n\n"));
 }
+
+/// Every operation on a *literal*, elaborated by a real tool.
+///
+/// A constant is inlined wherever it is used, and a resize is lowered to a
+/// concatenation with a constant, so an operand is very often a literal rather than a
+/// wire. That made `Select` the one operation whose output depended on its operand
+/// being a wire: it emitted `32'h510e527f[6 +: 26]`, which is not Verilog, for every
+/// shift, truncate, slice or extension of a constant.
+///
+/// The simulator evaluated the same nodes correctly throughout, so this is a case
+/// where the two backends agreed on the value and disagreed about whether the output
+/// was Verilog at all -- and the disagreement only surfaces at elaboration, in a
+/// generated file, about an operation three layers below the one that was written.
+/// A value test cannot see it and an elaborator can, which is why this gate exists.
+///
+/// Found by SHA-256, where the IV is a constant and shifting it is the obvious way
+/// to build the initial round state.
+#[test]
+fn every_operation_on_a_literal_elaborates() {
+    let Some(tool) = iverilog() else {
+        println!(
+            "SKIPPED: iverilog is not installed, so operations on literals were not \
+             elaborated. The text assertions below still run."
+        );
+        // Even without a tool, the output must not contain the invalid form. That is
+        // the assertion that matters and it needs no elaborator.
+        let (verilog, _) = literal_operations();
+        assert!(
+            !contains_literal_part_select(&verilog),
+            "a part-select is applied to a literal:\n{verilog}"
+        );
+        return;
+    };
+    println!("elaborating literal operations with {}", tool.display());
+
+    let (verilog, names) = literal_operations();
+    assert!(
+        !contains_literal_part_select(&verilog),
+        "a part-select is applied to a literal, which is not Verilog:\n{verilog}"
+    );
+
+    let report = check(
+        "literal_ops",
+        &[("ops".to_string(), verilog.clone())],
+        &tool,
+    );
+    if let Err(message) = report {
+        panic!("{message}");
+    }
+
+    // And the widths survive: a shift of a constant must not come back narrower than
+    // the operation asked for, which is the other half of the same bug.
+    for (name, width) in &names {
+        let declaration = format!("output wire [{index}:0]", index = width.saturating_sub(1));
+        let found =
+            verilog.contains(&declaration) || (*width == 1 && verilog.contains("output wire out"));
+        assert!(
+            found,
+            "{name} should be declared as a {width}-bit output\n{verilog}"
+        );
+    }
+}
+
+/// One module per operation on a literal, and their `(name, width)` pairs.
+///
+/// Each operation gets its own design and its own declared output, because the
+/// widths differ and a port list is one width. Nine tiny modules is less clever than
+/// a width-changing port and much easier to read when it fails.
+fn literal_operations() -> (String, Vec<(String, u32)>) {
+    // (name, build, width)
+    type Build = Box<dyn Fn(&Design) -> Result<Signal, ferrite_lithic::Error>>;
+    let operations: Vec<(&'static str, Build, u32)> = vec![
+        (
+            "slice",
+            Box::new(|d: &Design| d.slice(&d.lit(0x510e_527f, 32)?, 6, 26)),
+            26,
+        ),
+        (
+            "srl",
+            Box::new(|d: &Design| d.srl(&d.lit(0x510e_527f, 32)?, 6)),
+            32,
+        ),
+        (
+            "sll",
+            Box::new(|d: &Design| d.sll(&d.lit(0x510e_527f, 32)?, 6)),
+            32,
+        ),
+        (
+            "sra",
+            Box::new(|d: &Design| d.sra(&d.lit(0x510e_527f, 32)?, 6)),
+            32,
+        ),
+        (
+            "truncate",
+            Box::new(|d: &Design| d.truncate(&d.lit(0x510e_527f, 32)?, 11)),
+            11,
+        ),
+        (
+            "zero_extend",
+            Box::new(|d: &Design| d.zero_extend(&d.lit(0x510e_527f, 32)?, 40)),
+            40,
+        ),
+        (
+            "sign_extend",
+            Box::new(|d: &Design| d.sign_extend(&d.lit(0x510e_527f, 32)?, 40)),
+            40,
+        ),
+        (
+            "low_bit",
+            Box::new(|d: &Design| d.slice(&d.lit(0x510e_527f, 32)?, 0, 1)),
+            1,
+        ),
+        (
+            "top_bit",
+            Box::new(|d: &Design| d.slice(&d.lit(0x510e_527f, 32)?, 31, 1)),
+            1,
+        ),
+    ];
+
+    let mut all = String::new();
+    let mut names = Vec::new();
+    for (name, build, width) in &operations {
+        let d = Design::new();
+        let signal = build(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
+        d.output("out", signal.width(), &signal)
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+        let module = Module::combinational(
+            format!("lit_{name}"),
+            d.build().unwrap(),
+            d.input_ports().iter().map(|s| s.id()).collect(),
+            d.output_ports().iter().map(|s| s.id()).collect(),
+        );
+        all.push_str(&module.emit().unwrap_or_else(|e| panic!("{name}: {e}")));
+        names.push((format!("lit_{name}"), *width));
+    }
+    (all, names)
+}
+
+/// Whether any literal in the text is immediately part-selected.
+///
+/// Matches a sized literal followed by `[`, which is the exact shape that does not
+/// parse: `32'h510e527f[6 +: 26]`.
+fn contains_literal_part_select(verilog: &str) -> bool {
+    let bytes = verilog.as_bytes();
+    for (index, ch) in verilog.char_indices() {
+        if ch != '\'' {
+            continue;
+        }
+        // Walk forward to the closing quote of the literal.
+        let rest = &verilog[index..];
+        let Some(end) = rest[1..].find('\'') else {
+            continue;
+        };
+        let after = index + 1 + end + 1;
+        if bytes.get(after) == Some(&b'[') {
+            return true;
+        }
+    }
+    false
+}

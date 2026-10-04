@@ -44,7 +44,15 @@
 //! deliberate exception: the *graph* is built in a loop, and a const-generic width
 //! would have to be threaded through that loop as a type parameter.
 
+pub mod aes;
+pub mod base64;
+pub mod chacha20;
 pub mod crc3;
+pub mod crc32;
+pub mod ghash;
+pub mod hex;
+pub mod lfsr;
+pub mod sha256;
 
 use std::fmt;
 

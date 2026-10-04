@@ -77,11 +77,17 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-507 tests across the ten crates: 96 in `ferrite-lithic-bits`, 116 in
-`ferrite-lithic-ir`, 55 in the front end, 51 in the simulator, 50 in the Verilog
-emitter, 39 in `ferrite-lithic-derive`, 42 in `ferrite-lithic-wave`, 31 in
-`ferrite-lithic-cosim`, 16 in `ferrite-lithic-tb` and 11 in
-`ferrite-lithic-corpus`. The bits crate
+605 tests across the ten crates: 96 in `ferrite-lithic-bits`, 116 in
+`ferrite-lithic-ir`, 55 in the front end, 51 in the simulator, 51 in the Verilog
+emitter, 39 in `ferrite-lithic-derive`, 42 in `ferrite-lithic-wave`, 32 in
+`ferrite-lithic-cosim`, 17 in `ferrite-lithic-tb` and 106 in
+`ferrite-lithic-corpus`.
+
+The corpus is where the count is growing fastest, and not because the algorithms are
+hard. Nine designs so far — CRC-3, CRC-32, hex, base64, SHA-256, AES-128, ChaCha20,
+GHASH and the shared reflected-LFSR recurrence — each differentially tested against
+the crate that defines it, driven through the step testbench, and cosimulated against
+Verilator. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the

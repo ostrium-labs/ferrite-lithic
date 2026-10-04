@@ -371,3 +371,29 @@ fn the_testbench_compiles_a_design_it_cannot_step_yet_without_panicking() {
         "the message should be about the undriven wire: {error}"
     );
 }
+
+#[test]
+fn setting_an_input_takes_no_edge() {
+    // The primitive that a one-shot control needs. A design that consumes an input on
+    // every edge cannot be driven correctly with `drive` alone, because deasserting
+    // `init` would spend a cycle and consume a byte the caller never meant to send.
+    // `set` is what makes the sequence expressible:
+    //   set init 1; step; set init 0; drive b0; ...
+    let design = accumulator();
+    let tb = Testbench::new(&design).unwrap();
+    tb.run(|tb| async move {
+        tb.set("rst", 0).await;
+        tb.set("clr", 0).await;
+        tb.set("d", 1).await;
+        tb.step().await;
+        assert_eq!(tb.value("q"), 1);
+        // Changing an input without an edge leaves the register alone, because the
+        // register only changes on an edge.
+        tb.set("d", 100).await;
+        assert_eq!(tb.value("q"), 1, "no edge, no update");
+        tb.step().await;
+        assert_eq!(tb.value("q"), 101, "the held value is what the edge used");
+    })
+    .unwrap();
+    assert_eq!(tb.cycle(), 2, "two edges, not five");
+}

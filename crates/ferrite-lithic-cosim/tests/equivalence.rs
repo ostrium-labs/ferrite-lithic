@@ -155,3 +155,40 @@ fn module_for(design: &Design, name: &str) -> ferrite_lithic_rtl::Module {
         design.output_ports().iter().map(|s| s.id()).collect(),
     )
 }
+
+/// Two harnesses built from the same plan must not share a directory.
+///
+/// They used to. `Plan::work_dir` was keyed only by module name, so anything
+/// cosimulating the same top module wrote the same `dut.v`, the same `main.cpp` and
+/// the same `obj/`, and `run` rewrote a shared `stimulus.txt` per stimulus. The
+/// common symptom is a permission error or a link failure; the one that matters is
+/// silent, because `is_equivalent()` then answers about a stimulus the caller never
+/// passed.
+#[test]
+fn two_harnesses_for_the_same_module_do_not_share_a_directory() {
+    let Some(verilator) = verilator() else {
+        println!("SKIPPED: verilator not found, so the shared-directory check did not run.");
+        return;
+    };
+    println!("checking harness isolation with {}", verilator.display());
+
+    let (design, plan) = accumulator();
+    let verilog = ferrite_lithic_cosim::emit(&design, &plan).unwrap();
+    // The *same* root for both, which is exactly the case that used to collide.
+    let root = plan.work_dir();
+    let first = Harness::build(&plan, &verilog, &root).unwrap();
+    let second = Harness::build(&plan, &verilog, &root).unwrap();
+
+    assert_ne!(
+        first.root(),
+        second.root(),
+        "two builds must get separate object trees and separate stimulus files"
+    );
+    for harness in [&first, &second] {
+        assert!(
+            harness.root().starts_with(&root),
+            "and both stay under the directory the caller asked for: {}",
+            harness.root().display()
+        );
+    }
+}

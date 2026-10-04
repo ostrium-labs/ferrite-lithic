@@ -73,6 +73,58 @@ impl Future for Drive {
     }
 }
 
+/// Applies an input value and takes **no** edge.
+///
+/// The missing primitive until something needed it: a design with a one-shot control
+/// such as a CRC's `init` consumes a byte on *every* edge, so the byte carried by the
+/// `init` edge is discarded and the next edge is already the first message byte.
+/// With only `drive` -- set an input, take an edge -- there is no way to express
+/// "hold `init` high and then deassert it without spending a cycle", so the message
+/// acquires a spurious leading byte.
+///
+/// This makes the sequence read as what it is:
+///
+/// ```text
+/// set("init", 1);     // no edge: nothing has happened yet
+/// step();             // the edge that loads init, discarding this cycle's byte
+/// set("init", 0);     // released, still no edge
+/// drive("byte", b0);  // b0 is the first byte
+/// ```
+#[must_use = "a set does nothing unless it is awaited"]
+pub struct Set {
+    pub(crate) shared: Rc<Shared>,
+    pub(crate) port: String,
+    pub(crate) value: Option<Bits>,
+    done: bool,
+}
+
+impl Set {
+    pub(crate) fn new(shared: Rc<Shared>, port: String, value: Option<Bits>) -> Self {
+        Self {
+            shared,
+            port,
+            value,
+            done: false,
+        }
+    }
+}
+
+impl Future for Set {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
+        if this.done {
+            return Poll::Ready(());
+        }
+        this.done = true;
+        if let Some(value) = &this.value {
+            this.shared.set_input(&this.port, value);
+        }
+        Poll::Ready(())
+    }
+}
+
 /// A rising edge with no input change.
 ///
 /// For a design that is already being fed: a free-running counter, an LFSR with no
@@ -208,5 +260,11 @@ impl fmt::Debug for Pulse {
 impl fmt::Debug for Settle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         debug_step(f, "Settle", None, self.done)
+    }
+}
+
+impl fmt::Debug for Set {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        debug_step(f, "Set", Some(self.port.as_str()), self.done)
     }
 }

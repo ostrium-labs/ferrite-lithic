@@ -78,12 +78,16 @@ use ferrite_lithic::{Design, Signal};
 use ferrite_lithic_derive::PortList;
 
 use crate::BuildError;
+use crate::lfsr::reflected_tap;
 
 /// The reflected tap for CRC-3/ROTD, as three bits.
 ///
 /// `poly` reversed over the register width. See the module docs for why this is
 /// `0b110` and what happens if it is `0b011`.
 pub const TAP: u64 = 0b110;
+
+/// The catalogue polynomial, in forward form.
+pub const POLY: u64 = 0b011;
 
 /// The input ports.
 #[derive(Clone, Debug, PortList)]
@@ -154,27 +158,42 @@ pub fn build(design: &Design) -> Result<Ports, BuildError> {
 /// The eight unrolled LFSR steps for one byte.
 ///
 /// `state` is the register's current value and `byte` the next byte; the result is
-/// the value the register should take at the next edge. The loop is the algorithm
-/// from the module docs, run over design nodes: one slice for the input bit, one
-/// for the register's low bit, an XOR for the feedback, a shift, and a mux on the
-/// feedback to choose between the shifted value and the shifted value with the tap
-/// applied.
+/// the value the register should take at the next edge.
+///
+/// Delegates to [`crate::lfsr::reflected_lfsr`], which is where the recurrence, the
+/// argument for the reversed tap, and the byte-parallel shape live. CRC-32 is the
+/// same code over a 32-bit register.
 ///
 /// # Errors
 ///
 /// Whatever [`Design`] returns.
 pub fn advance(design: &Design, state: &Signal, byte: &Signal) -> Result<Signal, BuildError> {
-    let tap = design.lit(TAP, 3)?;
-    let mut accumulator = state.clone();
-    for bit in 0..8u32 {
-        // Bit `bit` counting from the least significant: the reflected algorithm
-        // consumes a byte's bits in that order.
-        let incoming = design.slice(byte, bit, 1)?;
-        let carried = design.slice(&accumulator, 0, 1)?;
-        let feedback = design.xor(&carried, &incoming)?;
-        let shifted = design.srl(&accumulator, 1)?;
-        let tapped = design.xor(&shifted, &tap)?;
-        accumulator = design.ite(&feedback, &tapped, &shifted)?;
+    crate::lfsr::reflected_lfsr(design, state, byte, TAP, 3)
+}
+
+/// The tap, derived from the catalogue polynomial rather than written down.
+///
+/// # Panics
+///
+/// Never. [`crate::lfsr::reflected_tap`] is total.
+#[must_use]
+pub fn tap() -> u64 {
+    crate::lfsr::reflected_tap(POLY, 3)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::{POLY, TAP, tap};
+
+    #[test]
+    fn the_tap_is_the_reversed_polynomial_not_the_polynomial() {
+        assert_eq!(tap(), TAP);
+        assert_ne!(
+            tap(),
+            POLY,
+            "CRC-3 with the forward polynomial is a different CRC with the same shape"
+        );
     }
-    Ok(accumulator)
 }
