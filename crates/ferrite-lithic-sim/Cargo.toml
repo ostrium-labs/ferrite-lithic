@@ -17,4 +17,8 @@ ferrite-lithic-bits.workspace = true
 ferrite-lithic-ir.workspace = true
 
 [dev-dependencies]
+# The README's doctests live here (see the `ReadmeExamples` target in `src/lib.rs`),
+# so every crate the README mentions has to be visible to them. A *dev*-dependency
+# is what makes that true without the simulator depending on another backend.
+ferrite-lithic-rtl.workspace = true
 proptest = "1.11"

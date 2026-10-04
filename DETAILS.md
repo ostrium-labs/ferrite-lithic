@@ -44,7 +44,7 @@ written to be extended if code or vectors are ever derived rather than rewritten
 | `ferrite-lithic-ir` | Arena of nodes with `NodeId`, wires resolved after construction | A1 **done** |
 | `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 **done** |
 | `ferrite-lithic-sim` | Cycle simulator: word addresses and an interpretable op list | A1 **done** |
-| `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
+| `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 **done** |
 | `ferrite-lithic-derive` | `#[derive]` for port-list structs | A2 |
 | `ferrite-lithic-wave` | VCD waveform writer | A2 |
 | `ferrite-lithic-cosim` | Verilator equivalence against `ferrite-lithic-sim` | A2 |
@@ -194,6 +194,9 @@ names would be a new, worse mechanism.
 | Waveform goldens | tied to proprietary waveterm | cycle-indexed `Bits` | we cannot reproduce their renderer |
 | `normalize_uids` | exists, off by default, test disabled | unnecessary | arena order is already canonical |
 | Multi-clock domains | three mechanisms incl. phantom types | single domain in A1 | locally-abstract types have no clean Rust form |
+| Register clear | a `clear_to` field, cleared to it | no such field, so clear holds | our `Reg` gates the update, and the simulator implements hold |
+| Instance ports | named ports on the instance | positional `.i0` / `.o0` | the IR records input order and has nowhere to keep port names |
+| Module dedup | interned definitions, one per name | name plus port signature | `Circuit` has no `PartialEq`, so two graphs cannot be compared here |
 
 Two OCaml-isms to avoid on sight: the global uid counter, and late name attachment
 via mutable metadata, which is why Hardcaml needs a lazily computed name map. Our
@@ -584,3 +587,88 @@ One narrowing came out of writing it: division is weighted down and its denomina
 is forced non-zero. A uniform choice over fourteen operations spends an embarrassing
 fraction of a run dividing by zero, which tests the refusal path very well and
 nothing else.
+
+## What the Verilog emitter settled
+
+### Determinism is structural, not defended
+
+The reference needs a pass to make its output reproducible. Node identity there is
+a `uid` from a process-global mutable counter, so two runs only agree if the program
+runs the same way twice, and the fix — `normalize_uids`, rewriting uids into DFS
+pre-order — is off by default with its own test commented out as "brittle to changes
+in the test environment". An arena makes the whole question disappear: ids *are*
+indices and indices are construction order, so walking the graph in id order is
+already canonical. What is left is the naming rule, and that is three states —
+ports, then named signals, then unnamed ones in graph order, deliberately not
+depth-first. Two arenas built the same way emit the same bytes, and that is a test
+rather than a hope.
+
+### The module name is legalised, and only `iverilog` could say so
+
+Every other identifier gets rewritten when it cannot be spelled in Verilog, and the
+module name was emitted verbatim: `Module::new("signed", ..)` produced a file whose
+third line was `module signed (`, which `iverilog` rejects with a syntax error. A
+golden could not have found it, because a golden reading `module signed (` looks
+exactly like one reading `module signed (`. The name is now legalised where the
+module is built, and the instantiation site legalises the submodule name the same
+way -- otherwise `module signed_` would be instantiated as `signed`, and the error
+would be about a missing module rather than about the name. It is still not
+*mangled*: no pool of module names to take a free one from, and a submodule has to
+stay findable under the name its instantiation site spells.
+
+Installing `iverilog` then paid for itself twice over, because the first design in
+the syntax gate registered the output of an adder whose other input was the register
+itself -- a cycle, which in a graph is just a wire nobody drives. The front end said
+so, but only because a tool was there to ask.
+
+### One wire per node, and therefore no precedence table
+
+The first version inlined operands, and it needed a precedence table to parenthesise
+the result. Then it became obvious that every reachable node has a wire anyway, so
+the inlining bought nothing and cost a whole precedence layer plus a class of
+parenthesisation bug. Emitting `assign signal_Add = a + b;` instead of
+`assign x = a + b + c;` means each line of Verilog is one line of the design and the
+emitter has nothing to parenthesise. Constants stay inline, because a constant *is*
+its value.
+
+### The register block is where the IR and the reference disagree
+
+The reference emits `else if (clear) q <= clear_to;`. We have no `clear_to` field,
+the front end documents clear as gating the update, and the simulator implements
+hold — so the emitter writes `q <= q;`. A zero there would have been a register
+that disagrees with its own simulator, and nothing in the test suite would have
+caught it: the goldens are text, and the cosimulator does not exist yet. That is the
+argument for reading the emitter's output line by line against the simulator's
+semantics rather than against the reference's shape.
+
+The same pass caught a documentation bug rather than a code one. The front end's
+canonical accumulator ties `clear` high, which means it holds forever and never
+accumulates — correct per the truth table, wrong for an example that calls itself an
+accumulator. The emitted `if (1'h1) q <= q;` made it impossible to miss.
+
+### The instance ABI had to be invented, because the IR has nowhere to put it
+
+`Node::Instance` records a submodule's name, its parameters and its inputs' order.
+It does not record the names of the submodule's ports, because the graph has no
+field for them. So an instantiation site cannot name what it connects to, and a
+submodule emitted with its own design's names cannot be bound by one. Rather than
+guess at names, the ABI is positional — `.i0`, `.i1`, …, `.o0` — and
+`PortNames::Positional` emits a submodule under exactly those names, reserving them
+before any user name so a signal called `i0` is renamed rather than shadowing a
+port. The reference's packed-output vector degenerates to the single output we have
+and becomes visible again when instances grow bundles.
+
+### Six refusals, and the two the reference never has to make
+
+A literal clock, a second clock domain, a stateful module with no clock, a whole
+memory used as a value, a port in both directions, and a port with no name. The last
+two are cases the reference never meets because it never has to describe a module
+from outside, and the first three are cases where a plausible-looking line of
+Verilog would compile and mean a different circuit.
+
+Module dedup is the one place the crate is weaker than the reference, and it is
+weaker for a knowable reason: the reference interns definitions in a table and can
+compare them, and `Circuit` has no `PartialEq`, so identity here is the name plus
+the port signature. Two different circuits with the same name *and* the same ports
+collapse to the first, undetected. Giving `Circuit` a `PartialEq` is the fix, and it
+belongs to the IR crate rather than here.

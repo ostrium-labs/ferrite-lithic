@@ -78,12 +78,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrite-lithic-rtl"
+version = "0.0.1"
+dependencies = [
+ "ferrite-lithic",
+ "ferrite-lithic-bits",
+ "ferrite-lithic-ir",
+]
+
+[[package]]
 name = "ferrite-lithic-sim"
 version = "0.0.1"
 dependencies = [
  "ferrite-lithic",
  "ferrite-lithic-bits",
  "ferrite-lithic-ir",
+ "ferrite-lithic-rtl",
  "proptest",
 ]
 

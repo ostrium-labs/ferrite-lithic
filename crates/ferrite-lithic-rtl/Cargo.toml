@@ -1,0 +1,19 @@
+[package]
+name = "ferrite-lithic-rtl"
+description = "The Verilog emitter for Ferrite Lithic: one module per circuit, with deterministic signal names"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-lithic-bits.workspace = true
+ferrite-lithic-ir.workspace = true
+
+[dev-dependencies]
+ferrite-lithic.workspace = true

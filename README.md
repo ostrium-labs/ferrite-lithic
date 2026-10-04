@@ -62,8 +62,9 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-309 tests across the four crates: 96 in `ferrite-lithic-bits`, 116 in
-`ferrite-lithic-ir`, 53 in the front end and 44 in the simulator. The bits crate
+359 tests across the five crates: 96 in `ferrite-lithic-bits`, 116 in
+`ferrite-lithic-ir`, 53 in the front end, 45 in the simulator and 49 in the Verilog
+emitter. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
@@ -87,7 +88,7 @@ let acc = d.wire(8)?;
 
 // The nesting that the IR's `&mut self` constructors forbid.
 let next = d.add(&acc, &d.lit(1, 8)?)?;
-let next = d.reg(&next, &clk, &d.constant(false), &d.constant(true))?;
+let next = d.reg(&next, &clk, &d.constant(false), &d.constant(false))?;
 d.drive(&acc, &next)?;
 # Ok(())
 # }
@@ -177,6 +178,71 @@ looks right is worse than no answer: a submodule `Instance` with no model, a des
 with two clocks, and division by zero. Emitted Verilog answers `x` for the last
 one and a two-state simulator has no `x` to give, so it is reported instead.
 
+### `ferrite-lithic-rtl`
+
+The Verilog emitter: one module per circuit, and names that do not move.
+
+```rust
+use ferrite_lithic::Design;
+use ferrite_lithic_rtl::Module;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let d = Design::new();
+let clk = d.input("clk", 1)?;
+let d_in = d.input("d", 8)?;
+
+let acc = d.wire(8)?;
+let next = d.add(&acc, &d_in)?;
+let next = d.reg(&next, &clk, &d.constant(false), &d.constant(false))?;
+d.drive(&acc, &next)?;
+d.output("acc", 8, &acc)?;
+
+let module = Module::new(
+    "accumulator",
+    d.build()?,
+    clk.id(),
+    d.input_ports().iter().map(|s| s.id()).collect(),
+    d.output_ports().iter().map(|s| s.id()).collect(),
+);
+print!("{}", module.emit()?);
+# Ok(())
+# }
+```
+
+**The same program emits the same bytes, structurally.** Hardcaml has to defend
+that with a `normalize_uids` pass that rewrites process-global uids into DFS
+pre-order — off by default, with its own test commented out as "brittle to changes
+in the test environment". Node ids here *are* arena indices and arena indices are
+construction order, so walking the graph in id order is already canonical and
+there is no pass to go wrong.
+
+**Names are allocated in three states: ports, then named signals, then unnamed
+ones in graph order.** Deliberately not depth-first, so names land in roughly the
+order the logic does, and user names always win over derived ones. An unnamed
+signal is `signal_<node_kind>`, collisions append `_<n>`, matching is
+case-insensitive, Verilog keywords get a trailing `_`, and anything that is not a
+legal identifier is rewritten rather than refused. `tests/naming.rs` asserts every
+one of those against the emitted text.
+
+**One wire per node, so no expression is ever nested.** An eight-bit add is
+`assign signal_Add = a + b;` and not `assign x = a + b + c;`, which means each line
+of the emitted Verilog is one line of the design, and the emitter needs no
+precedence table at all. Literals are the exception and stay inline: a constant
+*is* its value, and naming it would put an identifier in the output that nothing
+reads.
+
+**`clear` holds and `reset` clears**, emitted as `q <= q;` and `q <= 8'h00;`. The
+reference emits `else if (clear) q <= clear_to;` and our IR has no `clear_to` field
+— the front end's truth table and the simulator both say a cleared register keeps
+its value, so a zero here would have been a register that disagrees with its own
+simulator. A control input tied low is dropped instead: a test that can never fire
+is noise.
+
+**Six things are refused rather than approximated**, because emitting text that
+means a different circuit is worse than not emitting: a literal clock, a second
+clock domain, a module with state and no clock, a whole memory used as a value, a
+port listed in both directions, and a port with no name.
+
 ### `ferrite-lithic-ir`
 
 The signal graph: an arena of nodes whose identity is the arena index, and the
@@ -250,7 +316,7 @@ Crate layout
 | `ferrite-lithic-ir` | Signal graph: arena of nodes, `NodeId` indices, wires resolved after construction so cycles are legal | A1 **done** |
 | `ferrite-lithic` | Front-end DSL: `Signal` handle with operator overloads and builder functions | A1 **done** |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 **done** |
-| `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
+| `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 **done** |
 | `ferrite-lithic-derive` | `#[derive]` for port-list structs, `map`/`iter`/`of_signal` | A2 |
 | `ferrite-lithic-wave` | VCD waveform writer | A2 |
 | `ferrite-lithic-cosim` | Verilator equivalence checking against `ferrite-lithic-sim` | A2 |

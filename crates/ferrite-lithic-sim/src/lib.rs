@@ -101,9 +101,10 @@
 /// The README's examples, compiled and run as doctests.
 ///
 /// They live here rather than on the front-end crate because this is the only crate
-/// that depends on all the others, so it is the only one where every example in the
-/// file can resolve its imports. A crate needs a target for `include_str!` to hang
-/// them off, and an unused private struct is the cheapest one.
+/// whose *dev*-dependencies cover every crate the README mentions, so it is the
+/// only one where every example in the file can resolve its imports. A crate needs a
+/// target for `include_str!` to hang them off, and an unused private struct is the
+/// cheapest one.
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
 struct ReadmeExamples;

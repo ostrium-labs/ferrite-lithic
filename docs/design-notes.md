@@ -295,6 +295,75 @@ constraints and pin locations (absent entirely); and `Architecture`
 changes codegen** — it is a documentation marker, so we skip it rather than
 invent semantics for it.
 
+### What the implementation changed
+
+Building it moved five points, and all five are cases where the reference's text
+describes a graph ours cannot hold.
+
+**`clear` holds; the reference's `clear_to` does not exist here.** The reference
+emits `else if (clear) q <= clear_to;`. Our `Reg` has no `clear_to` field,
+`Node::Reg` documents clear as *gating* the update, the front end's truth table
+says a cleared register keeps its value, and the simulator implements hold. So the
+emitter writes `q <= q;`. Emitting a zero would have produced a register that
+disagrees with its own simulator — which is the failure the whole stack is arranged
+to prevent, and it is invisible until the cosimulator runs.
+
+**The sensitivity list is the clock edge only.** The reference turns clock *and*
+reset conditions into the sensitivity list (`src/rtl_verilog_of_ast.ml:153-157`),
+which is right for a reset that can be asynchronous. Ours is synchronous by
+construction, so putting reset in the sensitivity list would change the circuit
+rather than describe it.
+
+**A control input tied to a literal is folded, but only when it is zero.** The
+front end's own accumulator ties `reset` and `clear` low, so emitting
+`if (1'b0) q <= q; else q <= d;` in every register would be noise in every golden.
+A tied-*high* control is left in: a register whose reset is permanently asserted is
+a design that does not do what it looks like it does, and the emitted text is where
+that should become visible.
+
+**Instances have a positional port ABI, because the IR has nowhere to put port
+names.** `Node::Instance` records a submodule's name, its parameters and its
+inputs' *order* — not the names of its ports, because the graph has no field for
+them. So an instantiation site cannot name what it connects to. We made the ABI
+positional: inputs are `.i0`, `.i1`, … and the single output is `.o0`, and
+`Module::with_port_names(PortNames::Positional)` emits a submodule under those
+names, which reserves them before any user name so a signal called `i0` is renamed
+rather than allowed to shadow a port. The packed-output vector the reference uses
+(`docs/conversion_to_rtl.md:249-260`) degenerates to the single output here and
+becomes visible again when instances grow bundles.
+
+**The module names its clock, and dead logic is dropped.** A memory write port
+carries no clock, so write ports are clocked by the module's declared clock, and a
+register clocked by anything else is `Error::ClockMismatch` rather than a second
+domain quietly folded into the first. The emitted set is the outputs' cone under
+`Deps::WithoutCaseMatches`, which is what a vendor toolchain prunes to anyway.
+
+Two smaller consequences of the same exercise. One wire per node means no operand
+is ever a nested expression, so **there is no precedence table** — the emitter has
+nothing to parenthesise. And a multiply is full precision purely because of the
+width of the wire it assigns to, which is why the cast list is exactly `$signed`
+and nothing else: every other operand in the graph is an unsigned net.
+
+**The module name is legalised, and `iverilog` is what proved it had to be.** Every
+other identifier is rewritten when it cannot be spelled in Verilog, but the module
+name was emitted verbatim: `Module::new("signed", ..)` produced a file beginning
+`module signed (`, and `iverilog` answers that with a syntax error at line 3. No
+golden could have caught it, because a golden reading `module signed (` is
+indistinguishable from a golden reading `module signed (`. The name is now
+legalised in `Module::new` and `Module::combinational`, and the instantiation site
+legalises the submodule name the same way, so the two cannot disagree — otherwise
+`module signed_` would be instantiated as `signed` and the error would be about a
+missing module. The name is still not *mangled*: there is no pool of module names to
+take a free one from, and a submodule has to stay findable under the name its
+instantiation site spells.
+
+This is also the argument for keeping the `iverilog` gate the design notes specify
+(`docs/design-notes.md` §6) even though it is optional to run: within a day of
+being written it caught a design bug — the gate's own accumulator design registered
+the output of an adder whose other input was the register itself, which in a graph
+is simply an undriven wire — and then an emitter bug. Neither was visible in the
+text.
+
 ## 5. `ferrite-lithic-derive`: what the macro must and must not do
 
 **Direction is not inferred, and must not be.** Hardcaml's ppx does not infer it
@@ -388,6 +457,9 @@ non-constant outputs. We reuse both, and add the comparison that matters for us 
 | Waveform goldens | tied to proprietary waveterm | cycle-indexed `Bits` | we cannot reproduce their renderer |
 | `normalize_uids` | exists, off by default, test disabled | unnecessary | arena order is already canonical |
 | Multi-clock domains | three mechanisms, incl. phantom types | single domain in A1 | locally-abstract types have no clean Rust form |
+| `Reg` clear | `clear_to` field, clears to it | no such field, so clear holds | our `Reg` gates the update and the simulator implements hold |
+| Instance ports | named ports on the instance | positional `.i0`/`.o0` | the IR records input order but has nowhere to keep port names |
+| Module dedup | interned definitions, one per name | name plus port signature | `Circuit` has no `PartialEq`, so two graphs cannot be compared for equality here |
 
 Two OCaml-isms to avoid on sight: the global uid counter (thread a context
 handle through every constructor instead), and late name attachment via mutable

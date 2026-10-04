@@ -16,7 +16,7 @@
 //! let clk = d.input("clk", 1)?;
 //! let acc = d.wire(8)?;
 //! let next = d.add(&acc, &d.lit(1, 8)?)?;
-//! let next = d.reg(&next, &clk, &d.constant(false), &d.constant(true))?;
+//! let next = d.reg(&next, &clk, &d.constant(false), &d.constant(false))?;
 //! d.drive(&acc, &next)?;
 //!
 //! // The feedback loop through a register is legal, so the graph checks clean

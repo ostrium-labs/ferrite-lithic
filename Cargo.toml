@@ -14,6 +14,7 @@ authors = ["Dinakaran V <112177746+dina-kar@users.noreply.github.com>"]
 ferrite-lithic = { path = "crates/ferrite-lithic", version = "0.0.1" }
 ferrite-lithic-bits = { path = "crates/ferrite-lithic-bits", version = "0.0.1" }
 ferrite-lithic-ir = { path = "crates/ferrite-lithic-ir", version = "0.0.1" }
+ferrite-lithic-rtl = { path = "crates/ferrite-lithic-rtl", version = "0.0.1" }
 
 [workspace.lints.rust]
 # `deny`, deliberately not `forbid`. `forbid` cannot be overridden by a local
