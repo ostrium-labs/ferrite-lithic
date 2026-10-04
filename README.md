@@ -14,11 +14,12 @@ layout table below, plus `ferrite-lithic-corpus` — a set of verified designs
 written the way hardware would want them, which exist to check the *toolchain*
 rather than to exercise a feature.
 
-Verilator and Icarus are looked for rather than required, and both **print what
-they skipped**: `iverilog` for the syntax gate and `verilator` for equivalence
-checking. Install them and those tests run; leave them out and the rest of the
-suite is unchanged. With Verilator installed, the emitted Verilog for every corpus
-design is compiled, run, and compared against `ferrite-lithic-sim` cycle by cycle.
+Verilator and Icarus are looked for rather than required, so `cargo test` works
+without them; both **print what they skipped**. There is a CI job, `cosim`, that
+installs both and then *fails if anything skipped* — because a green run in which
+every equivalence test took its skip path is green and meaningless. With Verilator
+present, the emitted Verilog for every corpus design is compiled, run, and compared
+against `ferrite-lithic-sim` cycle by cycle.
 
 The corpus paid for itself immediately. `crc3` — a three-bit LFSR, one byte per
 cycle, the smallest design with a register and a bit stream — found four defects

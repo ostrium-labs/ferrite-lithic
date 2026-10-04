@@ -69,6 +69,55 @@ jobs:
       - name: cargo check
         run: cargo check --workspace --all-targets --all-features --locked
 
+  # The gates that need a vendor toolchain, in a job where the toolchain is
+  # *required* rather than looked for.
+  #
+  # Every other job runs with neither `verilator` nor `iverilog` installed, so both
+  # print their skip and the suite is green either way. That is the right default --
+  # a hard dependency on a vendor tool would make the suite unrunnable -- but it
+  # means the ordinary `test` job does not check the one thing a hardware DSL is
+  # mostly wrong about: whether the Verilog it emits behaves like the design.
+  #
+  # So this job installs both, and then asserts that *nothing skipped*. The grep is
+  # the point. Without it the job would pass on a runner where the install silently
+  # failed and every equivalence test took its skip path -- green, and meaningless.
+  cosim:
+    name: cosim (verilator + iverilog)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install verilator and iverilog
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y verilator iverilog
+      - name: tool versions
+        run: |
+          verilator --version
+          iverilog -V | head -1
+      - name: random-design equivalence
+        run: |
+          set -o pipefail
+          cargo test -p ferrite-lithic-cosim --test equivalence --all-features --locked \
+            -- --nocapture 2>&1 | tee /tmp/equivalence.txt
+      - name: corpus equivalence
+        run: |
+          set -o pipefail
+          cargo test -p ferrite-lithic-corpus --all-features --locked -- --nocapture 2>&1 \
+            | tee /tmp/corpus.txt
+      - name: the iCarus syntax gate
+        run: |
+          set -o pipefail
+          cargo test -p ferrite-lithic-rtl --test iverilog --all-features --locked \
+            -- --nocapture 2>&1 | tee /tmp/iverilog.txt
+      - name: nothing may have skipped
+        run: |
+          if grep -q SKIPPED /tmp/equivalence.txt /tmp/corpus.txt /tmp/iverilog.txt; then
+            echo "::error::a testbench-gated test skipped, so this job proved nothing"
+            grep -n SKIPPED /tmp/equivalence.txt /tmp/corpus.txt /tmp/iverilog.txt
+            exit 1
+          fi
+          echo "every gated test ran"
+
   deny:
     name: supply chain
     runs-on: ubuntu-latest
