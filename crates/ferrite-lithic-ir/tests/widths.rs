@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used)]
 
 use ferrite_lithic_bits::Bits;
-use ferrite_lithic_ir::{CaseArm, Circuit, Error, Node, NodeId};
+use ferrite_lithic_ir::{CaseArm, Circuit, Error, Node, NodeId, Op};
 
 fn bits(value: u64, width: u32) -> Bits {
     Bits::constant(value, width).unwrap()
@@ -424,16 +424,26 @@ fn a_write_ports_enable_must_be_one_bit() {
 }
 
 #[test]
-fn an_instance_refuses_a_zero_output_width_or_an_empty_name() {
+fn an_instance_refuses_a_zero_output_width() {
     let mut c = fresh();
     assert!(matches!(
         c.instance("sub", Vec::new(), Vec::new(), 0).unwrap_err(),
         Error::ZeroWidth { .. }
     ));
-    assert!(matches!(
-        c.instance("", Vec::new(), Vec::new(), 8).unwrap_err(),
-        Error::ZeroWidth { .. }
-    ));
+}
+
+#[test]
+fn an_instance_refuses_an_empty_name() {
+    // Reported as its own error rather than as `ZeroWidth`: the name becomes the
+    // instance identifier in the generated Verilog, so an empty one is a
+    // different mistake with a different fix, and `ZeroWidth` names neither.
+    let mut c = fresh();
+    let err = c.instance("", Vec::new(), Vec::new(), 8).unwrap_err();
+    assert!(matches!(err, Error::EmptyInstanceName { .. }));
+    assert!(
+        err.to_string().contains("non-empty name"),
+        "message should name the problem: {err}"
+    );
 }
 
 #[test]
@@ -531,4 +541,165 @@ fn a_healthy_graph_checks_clean() {
     c.check().unwrap();
     assert_eq!(c.name(acc), Some("acc"));
     assert_eq!(c.memory_shape(mem).unwrap(), (8, 8));
+}
+
+// ------------------------------------------------- memory diagnostics are about memory
+
+#[test]
+fn using_a_non_memory_where_a_memory_is_wanted_says_so() {
+    // Every one of these used to report `NotAWire`, which named the wrong
+    // requirement: the caller wanted a memory, and "create a wire" sends them
+    // somewhere else entirely. A wire *is* a legal target for `drive`, so the
+    // message was not merely terse, it was misleading about the same node kind.
+    let mut c = fresh();
+    let en = c.constant(bits(1, 1));
+    let addr = c.constant(bits(0, 3));
+    let data = c.constant(bits(9, 8));
+    let not_a_memory = c.constant(bits(0, 8));
+
+    let err = c.write_port(not_a_memory, data, addr, en).unwrap_err();
+    assert!(matches!(err, Error::NotAMemory { .. }));
+    assert!(
+        err.to_string().contains("as a memory"),
+        "message should say a memory was wanted: {err}"
+    );
+
+    let err = c.read_port(not_a_memory, addr, en).unwrap_err();
+    assert!(matches!(err, Error::NotAMemory { .. }));
+
+    let err = c.memory_shape(not_a_memory).unwrap_err();
+    assert!(matches!(err, Error::NotAMemory { .. }));
+
+    let err = c.write_ports_of(not_a_memory).unwrap_err();
+    assert!(matches!(err, Error::NotAMemory { .. }));
+}
+
+#[test]
+fn driving_a_wire_still_reports_not_a_wire() {
+    // The positive and negative case of the same predicate, side by side, so a
+    // future refactor cannot swap them.
+    let mut c = fresh();
+    let wire = c.wire(8).unwrap();
+    let driver = c.constant(bits(3, 8));
+    c.drive(wire, driver).unwrap();
+
+    let err = c.drive(driver, driver).unwrap_err();
+    assert!(matches!(err, Error::NotAWire { .. }));
+    assert!(
+        err.to_string().contains("rather than a wire"),
+        "message should name the wire requirement: {err}"
+    );
+}
+
+// --------------------------------------------------------------------- select
+
+#[test]
+fn a_select_is_len_bits_wide() {
+    let mut c = fresh();
+    let wide = c.wire(16).unwrap();
+    // Bound first: `c.width_of(c.select(..))` does not borrow-check, which is the
+    // whole reason the front-end DSL takes `&self` instead of `&mut self`.
+    let narrow = c.select(wide, 3, 5).unwrap();
+    assert_eq!(c.width_of(narrow), 5);
+    let whole = c.select(wide, 0, 16).unwrap();
+    assert_eq!(c.width_of(whole), 16);
+    let top = c.select(wide, 15, 1).unwrap();
+    assert_eq!(c.width_of(top), 1);
+}
+
+#[test]
+fn a_select_takes_the_bits_it_claims() {
+    let mut c = fresh();
+    let value = c.constant(bits(0b1101_1010, 8));
+    let low = c.select(value, 0, 4).unwrap();
+    let high = c.select(value, 4, 4).unwrap();
+    let bit = c.select(value, 7, 1).unwrap();
+    // The node records the window, so the offsets are checkable directly.
+    match c.get(low).unwrap() {
+        Node::Select { offset, len, .. } => {
+            assert_eq!((*offset, *len), (0, 4));
+        }
+        other => panic!("expected a Select, got {}", other.kind()),
+    }
+    assert!(matches!(
+        c.get(bit).unwrap(),
+        Node::Select {
+            offset: 7,
+            len: 1,
+            ..
+        }
+    ));
+    assert!(matches!(
+        c.get(high).unwrap(),
+        Node::Select { offset: 4, .. }
+    ));
+}
+
+#[test]
+fn a_select_that_runs_past_the_end_is_refused() {
+    let mut c = fresh();
+    let value = c.wire(8).unwrap();
+    // Off by one either way, which is exactly how this is written by accident.
+    assert!(matches!(
+        c.select(value, 4, 5).unwrap_err(),
+        Error::SelectOutOfRange {
+            offset: 4,
+            len: 5,
+            value_width: 8,
+            ..
+        }
+    ));
+    assert!(matches!(
+        c.select(value, 9, 1).unwrap_err(),
+        Error::SelectOutOfRange { .. }
+    ));
+    let err = c.select(value, 4, 5).unwrap_err();
+    assert!(
+        err.to_string().contains("runs past the end"),
+        "message should say where it ran off: {err}"
+    );
+}
+
+#[test]
+fn a_select_of_zero_bits_is_refused() {
+    let mut c = fresh();
+    let value = c.wire(8).unwrap();
+    assert!(matches!(
+        c.select(value, 0, 0).unwrap_err(),
+        Error::ZeroWidth { op: Op::Select }
+    ));
+}
+
+#[test]
+fn a_hand_built_select_that_overruns_is_caught_by_check() {
+    // `add_node` does no validation, so `check` is the only thing standing between
+    // a malformed node and a graph that claims more bits than it has.
+    let mut c = fresh();
+    let value = c.wire(8).unwrap();
+    c.add_node(Node::Select {
+        value,
+        offset: 6,
+        len: 4,
+    })
+    .unwrap();
+    let err = c.check().unwrap_err();
+    assert!(
+        matches!(err, Error::WidthInvariant { .. }),
+        "expected a width invariant failure, got {err:?}"
+    );
+}
+
+#[test]
+fn a_well_formed_hand_built_select_checks_clean() {
+    let mut c = fresh();
+    let value = c.wire(8).unwrap();
+    let driver = c.constant(bits(7, 8));
+    c.drive(value, driver).unwrap();
+    c.add_node(Node::Select {
+        value,
+        offset: 4,
+        len: 4,
+    })
+    .unwrap();
+    c.check().unwrap();
 }

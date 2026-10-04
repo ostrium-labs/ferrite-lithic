@@ -1,0 +1,19 @@
+[package]
+name = "ferrite-lithic"
+description = "The front-end DSL for Ferrite Lithic: build a circuit by writing arithmetic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-lithic-bits.workspace = true
+ferrite-lithic-ir.workspace = true
+
+[dev-dependencies]
+proptest = "1.11"

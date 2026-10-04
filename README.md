@@ -9,8 +9,9 @@ transpiler from another language: a Rust library you call from Rust.
 Status
 ------
 
-**Phase A1, in progress.** `ferrite-lithic-bits` and `ferrite-lithic-ir` are
-implemented and tested; the rest of the crate split below is the intended shape.
+**Phase A1, in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir` and the
+`ferrite-lithic` front end are implemented and tested; the rest of the crate
+split below is the intended shape.
 The design notes that settle the simulator's execution model and the Verilog
 emitter's contract are in `docs/design-notes.md`, and `DETAILS.md` is the single
 place everything known lives.
@@ -41,7 +42,7 @@ Widths are runtime values, so a width mismatch is a runtime error rather than a
 compile error. The error message therefore names both operand widths and the
 explicit operation that fixes it:
 
-```
+```text
 width mismatch in `add`: the left operand is 8 bits and the right operand is
 16 bits. `add` and `sub` require equal widths and return the left operand's
 width, discarding whatever falls off the top. Resize both operands first with
@@ -61,7 +62,8 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-107 tests in `ferrite-lithic-ir`, and 95 in `ferrite-lithic-bits`. The bits crate
+264 tests across the three crates: 95 in `ferrite-lithic-bits`, 116 in
+`ferrite-lithic-ir`, 53 in the front end. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
@@ -69,6 +71,53 @@ to width 6, and an explicit width 1..40 sweep for `mul` covering the
 runs the cycle claims from the research as named tests, plus property tests that
 check every width against an independent recomputation and every topological
 order against its own definition.
+
+### `ferrite-lithic`
+
+The front end: the same graph, written as arithmetic.
+
+```rust
+use ferrite_lithic::Design;
+
+# fn main() -> Result<(), ferrite_lithic::Error> {
+let d = Design::new();
+
+let clk = d.input("clk", 1)?;
+let acc = d.wire(8)?;
+
+// The nesting that the IR's `&mut self` constructors forbid.
+let next = d.add(&acc, &d.lit(1, 8)?)?;
+let next = d.reg(&next, &clk, &d.constant(false), &d.constant(true))?;
+d.drive(&acc, &next)?;
+# Ok(())
+# }
+```
+
+**There are two tiers, because `a + b` cannot return an error.** Every builder
+takes `&self` and returns `Result`; the infix operators build the same nodes but
+panic, since `impl Add` has one output type. `tests/operators.rs` compares the two
+paths for every operator so they cannot drift.
+
+```rust
+use ferrite_lithic::Design;
+
+# fn main() -> Result<(), ferrite_lithic::Error> {
+let d = Design::new();
+let a = d.lit(0b1010_1010, 8)?;
+let b = d.lit(0x0f, 8)?;
+
+let checked = d.add(&a, &b)?;   // Result, with a message naming both widths
+let concise = &a + &b;          // panics, with the same message
+assert_eq!(checked.kind(), concise.kind());
+# Ok(())
+# }
+```
+
+The arena is `Rc<RefCell<Circuit>>` behind `&self` builders, which is what makes
+nesting possible. The `RefCell` is quarantined to the builder: a `Signal` is a
+node id and a cached width with no reference *into* the arena, so the graph stays
+cheap to traverse, and every borrow is taken and released inside one method body
+that cannot re-enter.
 
 ### `ferrite-lithic-ir`
 
@@ -141,7 +190,7 @@ Crate layout
 |---|---|---|
 | `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
 | `ferrite-lithic-ir` | Signal graph: arena of nodes, `NodeId` indices, wires resolved after construction so cycles are legal | A1 **done** |
-| `ferrite-lithic` | Front-end DSL: `Signal` handle with operator overloads and builder functions | A1 |
+| `ferrite-lithic` | Front-end DSL: `Signal` handle with operator overloads and builder functions | A1 **done** |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
 | `ferrite-lithic-derive` | `#[derive]` for port-list structs, `map`/`iter`/`of_signal` | A2 |
@@ -171,7 +220,7 @@ Design decisions
 Building
 --------
 
-```
+```text
 cargo build
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings

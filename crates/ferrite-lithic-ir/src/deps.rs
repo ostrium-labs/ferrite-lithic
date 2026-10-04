@@ -61,6 +61,22 @@ pub enum Deps {
 }
 
 impl Deps {
+    /// A short name for the relation, for diagnostics.
+    ///
+    /// An error has to say *which* notion of a cycle was violated, because the
+    /// three genuinely disagree: a loop through a register is legal for loop
+    /// checking and is a scheduling loop for simulation.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::LoopChecking => "loop-checking",
+            Self::SimulationScheduling => "simulation-scheduling",
+            Self::WithoutCaseMatches => "without-case-matches",
+        }
+    }
+}
+
+impl Deps {
     /// Whether the traversal should recurse into this node's inputs.
     ///
     /// A terminal node is a leaf: the traversal stops there and does not consider

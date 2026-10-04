@@ -38,6 +38,8 @@ pub enum Op {
     Drive,
     /// [`Circuit::not`](crate::Circuit::not).
     Not,
+    /// [`Circuit::select`](crate::Circuit::select).
+    Select,
     /// [`Circuit::bit_and`](crate::Circuit::bit_and).
     BitAnd,
     /// [`Circuit::bit_or`](crate::Circuit::bit_or).
@@ -98,6 +100,49 @@ pub enum Op {
     Replace,
 }
 
+impl Op {
+    /// A short name for the operation, for diagnostics and tests.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Constant => "constant",
+            Self::Wire => "wire",
+            Self::Drive => "drive",
+            Self::Not => "not",
+            Self::Select => "select",
+            Self::BitAnd => "bit_and",
+            Self::BitOr => "bit_or",
+            Self::BitXor => "bit_xor",
+            Self::Add => "add",
+            Self::Sub => "sub",
+            Self::Mul => "mul",
+            Self::UDiv => "udiv",
+            Self::SDiv => "sdiv",
+            Self::URem => "urem",
+            Self::SRem => "srem",
+            Self::Eq => "eq",
+            Self::Ult => "ult",
+            Self::Ule => "ule",
+            Self::Ugt => "ugt",
+            Self::Uge => "uge",
+            Self::Slt => "slt",
+            Self::Sle => "sle",
+            Self::Sgt => "sgt",
+            Self::Sge => "sge",
+            Self::Cat => "cat",
+            Self::Replicate => "replicate",
+            Self::Ite => "ite",
+            Self::Case => "case_",
+            Self::Reg => "reg",
+            Self::Mem => "mem",
+            Self::ReadPort => "read_port",
+            Self::Instance => "instance",
+            Self::Name => "name",
+            Self::Replace => "replace",
+        }
+    }
+}
+
 impl fmt::Display for Op {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
@@ -105,6 +150,7 @@ impl fmt::Display for Op {
             Op::Wire => "wire",
             Op::Drive => "drive",
             Op::Not => "not",
+            Op::Select => "select",
             Op::BitAnd => "bit_and",
             Op::BitOr => "bit_or",
             Op::BitXor => "bit_xor",
@@ -152,6 +198,18 @@ pub enum Relation {
     SimulationScheduling,
     /// [`Deps::WithoutCaseMatches`](crate::Deps::WithoutCaseMatches).
     WithoutCaseMatches,
+}
+
+impl Relation {
+    /// A short name for the relation, for diagnostics.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::LoopChecking => "loop-checking",
+            Self::SimulationScheduling => "simulation-scheduling",
+            Self::WithoutCaseMatches => "without-case-matches",
+        }
+    }
 }
 
 impl fmt::Display for Relation {
@@ -254,6 +312,51 @@ pub enum Error {
         wire: NodeId,
         /// Its declared width, in bits.
         width: u32,
+    },
+
+    /// A slice fell outside the signal it was slicing.
+    ///
+    /// Distinct from [`Error::WidthMismatch`] because nothing is mismatched: the
+    /// window `[offset, offset + len)` simply does not fit, and the message has to
+    /// say where it ran off the end.
+    SelectOutOfRange {
+        /// The operation that requested it.
+        op: Op,
+        /// The width of the signal being sliced.
+        value_width: u32,
+        /// The requested low bit.
+        offset: u32,
+        /// The requested length.
+        len: u32,
+    },
+
+    /// A signal that is not a constant was adopted as one.
+    NotAConstant {
+        /// The node that was expected to be a constant.
+        target: NodeId,
+        /// What kind of node it actually is.
+        kind: &'static str,
+    },
+
+    /// A memory-only operation was applied to a node that is not a memory.
+    ///
+    /// Separate from [`Error::NotAWire`] because reporting a non-memory as "not a
+    /// wire" names the wrong requirement: the caller wanted a memory, and telling
+    /// them to create a wire sends them somewhere else entirely.
+    NotAMemory {
+        /// The node that was used as a memory.
+        target: NodeId,
+        /// What kind of node it actually is.
+        kind: &'static str,
+    },
+
+    /// An instance was built with an empty name.
+    ///
+    /// The instance does not exist yet when this is detected, so like
+    /// [`Error::CaseNoArms`] it carries nothing identifying.
+    EmptyInstanceName {
+        /// The operation that requested it.
+        op: Op,
     },
 
     /// A `case` was built with no arms.
@@ -470,6 +573,39 @@ impl fmt::Display for Error {
                 "width must be at least 1 bit, but `{op}` was asked for 0 bits. \
                  There is no zero-width value domain: use 1 bit and let the \
                  surrounding `cat` or selection discard what you do not need."
+            ),
+            Error::SelectOutOfRange {
+                op,
+                value_width,
+                offset,
+                len,
+            } => write!(
+                f,
+                "`{op}` asked for bits {offset}..{} of a {value_width}-bit signal, \
+                 which runs past the end. Slice within the width, or ask for fewer \
+                 bits.",
+                u64::from(*offset) + u64::from(*len)
+            ),
+            Error::NotAConstant { target, kind } => write!(
+                f,
+                "cannot adopt {target} as a constant, because it is a {kind} node. \
+                 Only a constant has a single value that can be copied into another \
+                 design; a wire or an operation does not, and copying one as zero \
+                 would quietly build the wrong circuit."
+            ),
+            Error::NotAMemory { target, kind } => write!(
+                f,
+                "cannot use {target} as a memory, because it is a {kind} node. A \
+                 memory is created by `Circuit::mem`, which fixes its data width and \
+                 depth; reads come from separate `Circuit::read_port` nodes and \
+                 writes from `Circuit::write_port` calls, so a plain wire or constant \
+                 is not a substitute."
+            ),
+            Error::EmptyInstanceName { op } => write!(
+                f,
+                "an `{op}` needs a non-empty name, because the name becomes the \
+                 instance identifier in the generated Verilog. Give it the name of \
+                 the module you are instantiating, e.g. `my_submodule`."
             ),
             Error::NotAWire { target, kind } => write!(
                 f,

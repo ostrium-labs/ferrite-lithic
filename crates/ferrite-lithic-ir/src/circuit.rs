@@ -45,7 +45,7 @@ use crate::node::{CaseArm, Node, WritePort, address_width_for_depth};
 /// silently ignored the assignment would make the graph disagree with the program,
 /// the third because a wire and its driver disagreeing in width would put a
 /// truncation nobody wrote into the hardware.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Circuit {
     nodes: Vec<Node>,
     names: BTreeMap<NodeId, String>,
@@ -234,7 +234,7 @@ impl Circuit {
             Node::Mem {
                 data_width, depth, ..
             } => Ok((*data_width, *depth)),
-            other => Err(Error::NotAWire {
+            other => Err(Error::NotAMemory {
                 target: mem,
                 kind: other.kind(),
             }),
@@ -249,7 +249,7 @@ impl Circuit {
     pub fn write_ports_of(&self, mem: NodeId) -> Result<&[WritePort], Error> {
         match self.get(mem)? {
             Node::Mem { write_ports, .. } => Ok(write_ports),
-            other => Err(Error::NotAWire {
+            other => Err(Error::NotAMemory {
                 target: mem,
                 kind: other.kind(),
             }),
@@ -262,6 +262,29 @@ impl Circuit {
     #[must_use]
     pub fn not(&mut self, arg: NodeId) -> NodeId {
         self.push(Node::Not { arg })
+    }
+
+    /// A run of `len` bits starting at `offset`, counting from the least
+    /// significant bit. The result is `len` bits wide.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ZeroWidth`] if `len` is zero, and [`Error::SelectOutOfRange`] if
+    /// the window runs past the end of `value`.
+    pub fn select(&mut self, value: NodeId, offset: u32, len: u32) -> Result<NodeId, Error> {
+        if len == 0 {
+            return Err(Error::ZeroWidth { op: Op::Select });
+        }
+        let value_width = self.width_of(value);
+        if u64::from(offset) + u64::from(len) > u64::from(value_width) {
+            return Err(Error::SelectOutOfRange {
+                op: Op::Select,
+                value_width,
+                offset,
+                len,
+            });
+        }
+        Ok(self.push(Node::Select { value, offset, len }))
     }
 
     /// Bitwise AND. Requires equal widths.
@@ -555,7 +578,7 @@ impl Circuit {
             data_width, depth, ..
         } = *self.get(mem)?
         else {
-            return Err(Error::NotAWire {
+            return Err(Error::NotAMemory {
                 target: mem,
                 kind: self.get(mem)?.kind(),
             });
@@ -610,7 +633,7 @@ impl Circuit {
             data_width, depth, ..
         } = self.get(mem)?
         else {
-            return Err(Error::NotAWire {
+            return Err(Error::NotAMemory {
                 target: mem,
                 kind: self.get(mem)?.kind(),
             });
@@ -652,7 +675,7 @@ impl Circuit {
             return Err(Error::ZeroWidth { op: Op::Instance });
         }
         if name.is_empty() {
-            return Err(Error::ZeroWidth { op: Op::Instance });
+            return Err(Error::EmptyInstanceName { op: Op::Instance });
         }
         Ok(self.push(Node::Instance {
             name,
@@ -986,6 +1009,9 @@ impl Circuit {
     /// Check the whole graph: no dangling operands, no undriven wires, and every
     /// stored width agrees with the width its operands imply.
     ///
+    /// An *input port* is an undriven wire by construction, so this reports one.
+    /// Use [`Circuit::check_with_inputs`] when the circuit has ports.
+    ///
     /// The width check is not redundant bookkeeping. Widths are *stored* on the
     /// node kinds that cannot derive them from their operands — `Case`, `ReadPort`,
     /// `Mem`, `Instance`, `Wire` — so that [`width_of`](Self::width_of) is a single
@@ -997,6 +1023,39 @@ impl Circuit {
     ///
     /// The first problem found, in node id order.
     pub fn check(&self) -> Result<(), Error> {
+        self.check_with_inputs(&[])
+    }
+
+    /// [`Circuit::check`], but treating `inputs` as driven from outside.
+    ///
+    /// A module's input port is an undriven wire by construction — something
+    /// outside the module supplies it — so `check` needs to be told which wires
+    /// are ports rather than inferring it from a name or a width. Hardcaml gets
+    /// this from the port lists its `derive` macro generates; we take the list
+    /// explicitly here and let the front end collect it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownNode`] if an id in `inputs` is not in this circuit, and
+    /// otherwise whatever [`Circuit::check`] reports.
+    pub fn check_with_inputs(&self, inputs: &[NodeId]) -> Result<(), Error> {
+        let mut externally_driven = vec![false; self.nodes.len()];
+        for id in inputs {
+            if id.index() >= self.nodes.len() {
+                return Err(Error::UnknownNode {
+                    id: *id,
+                    len: self.nodes.len(),
+                });
+            }
+            // Naming it a port does not excuse it being the wrong kind of node.
+            if !matches!(self.get(*id)?, Node::Wire { .. }) {
+                return Err(Error::NotAWire {
+                    target: *id,
+                    kind: self.get(*id)?.kind(),
+                });
+            }
+            externally_driven[id.index()] = true;
+        }
         for id in self.node_ids() {
             let node = self.get(id)?;
             for operand in node.operands() {
@@ -1016,6 +1075,18 @@ impl Circuit {
                 Node::ReadPort {
                     mem, data_width, ..
                 } => (self.width_of(*mem), *data_width),
+                // A select stores its own `len`, so the invariant that matters is
+                // that the window fits the value it slices. `add_node` does no
+                // checking, so a hand-built node can disagree.
+                Node::Select {
+                    value, offset, len, ..
+                } => {
+                    let value_width = self.width_of(*value);
+                    if u64::from(*offset) + u64::from(*len) <= u64::from(value_width) {
+                        continue;
+                    }
+                    (value_width, *len)
+                }
                 _ => continue,
             };
             if derived.0 != derived.1 {
@@ -1048,6 +1119,9 @@ impl Circuit {
             // A wire that nothing reads is a leftover, not a bug; reporting it
             // would make `check` fail on a work-in-progress graph.
             if !referenced[id.index()] {
+                continue;
+            }
+            if externally_driven[id.index()] {
                 continue;
             }
             if let Node::Wire { width, driver } = self.get(id)?

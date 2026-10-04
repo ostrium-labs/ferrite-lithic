@@ -228,6 +228,7 @@ fn reference_width(c: &Circuit, id: NodeId) -> u32 {
             .checked_add(reference_width(c, *low))
             .unwrap(),
         Node::Replicate { value, count } => reference_width(c, *value).checked_mul(*count).unwrap(),
+        Node::Select { len, .. } => *len,
         Node::Ite { then_value, .. } => reference_width(c, *then_value),
         Node::Case { width, .. } => *width,
         Node::Reg { data, .. } => reference_width(c, *data),

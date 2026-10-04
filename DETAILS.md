@@ -7,10 +7,10 @@ Everything known about this project in one place. Companion documents:
 - `docs/adr/` — 17 accepted architecture decision records
 - `../ferrite-strata/DETAILS.md` — the companion runtime
 
-Status: **Phase A1 in progress.** `ferrite-lithic-bits` and `ferrite-lithic-ir` are
-implemented, documented and tested (202 tests); the remaining A1 crates — the DSL
-front end, `-sim` and `-rtl` — are not yet written. Nothing is published to
-crates.io yet.
+Status: **Phase A1 in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir` and
+the `ferrite-lithic` front end are implemented, documented and tested (264 tests);
+the remaining A1 crates — `-sim` and `-rtl` — are not yet written. Nothing is
+published to crates.io yet.
 
 ## 1. What it is
 
@@ -42,7 +42,7 @@ written to be extended if code or vectors are ever derived rather than rewritten
 |---|---|---|
 | `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
 | `ferrite-lithic-ir` | Arena of nodes with `NodeId`, wires resolved after construction | A1 **done** |
-| `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 |
+| `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 **done** |
 | `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
@@ -407,3 +407,89 @@ that cannot hit a real PDK is worthless however good the CPU is.
 3. Whether 8x4 tiles is likely to be available.
 4. Whether a submission may depend on an external SRAM macro, and whether
    pre-verified SRAM collateral is supplied.
+### What the front end settled: a mutable arena cannot have `a + b`
+
+The plan assumed a `Signal` handle with operator overloads, and the arena from
+§2 makes half of that impossible. `Circuit` appends to a `Vec`, so its
+constructors take `&mut self`, and this does not compile:
+
+```compile_fail
+c.add(acc, c.constant(Bits::constant(1, 8)?))?;   // two &mut borrows
+```
+
+That is not a papercut; it is the shape of every expression in the language. A
+node cannot be built inside another node's arguments. It surfaced immediately as
+a compile error in the IR's own test suite while writing the select tests.
+
+There are three ways out, and only one of them keeps errors load-bearing:
+
+| Approach | Why not |
+|---|---|
+| `&mut self` builders | Nesting stays impossible, which is the whole problem |
+| Operators on a `Copy` handle | `a + b` cannot return `Result`, so a width error would have to vanish or panic silently |
+| `&self` builders over a shared arena | **Chosen.** Nesting works, and `Result` survives |
+
+So `Design` holds `Rc<RefCell<Circuit>>` and every builder takes `&self`. The
+`RefCell` is quarantined in three ways, and each is checkable rather than a
+promise:
+
+- **Only the builder is interior-mutable, never a node.** A `Signal` is a
+  `NodeId` plus a cached width; it holds no reference *into* the arena, so the
+  graph stays as cheap to walk as the IR intended. The IR crate's rejection of
+  `Rc<RefCell<..>>` per node still stands.
+- **The borrow cannot overlap.** Every builder takes the borrow inside one method
+  body that calls no user code and re-enters no builder, so there is no path to a
+  `RefCell` panic. A panic would need re-entrancy.
+- **It is paid for once.** Operators are implemented on `&Signal` and recover
+  their design from the left operand's arena, which is why `Signal` and `Design`
+  share a small `Arena` struct rather than a bare `RefCell<Circuit>`.
+
+The operators are a second, *concise* tier that panics, because `impl Add` has
+one output type and a width error has to go somewhere. Both tiers call the same
+builder, so there is one implementation and `tests/operators.rs` compares the
+node kind and width of both paths for every operator. The panic keeps the
+builder's own message and `#[track_caller]`, so it names both widths and points at
+the user's line — `tests/operators.rs` asserts the *file* the panic is attributed
+to, which is the half of `track_caller` that survives `rustfmt`.
+
+Comparisons deliberately have **no** operator. `==` is `PartialEq` on `Signal`
+and answers "is this the same node", a question about handles; overloading it for
+value equality would make `assert_eq!(a, b)` mean two different things in two
+places. The value comparison is `Signal::equals`.
+
+#### Three more bugs, and the shape they share
+
+All three were in code that looked right, and all three were found by tests
+written to be awkward:
+
+| Bug | Symptom | Caught by |
+|---|---|---|
+| `Circuit::write_port`/`read_port`/`memory_shape`/`write_ports_of` reported `NotAWire` for a non-memory | A wire *is* a legal `drive` target, so the message told the reader to do something that would not help | four tests asserting `NotAMemory`, next to one asserting a bad `drive` still says `NotAWire` |
+| `instance("")` reported `ZeroWidth` | "width must be at least 1 bit" for a missing name is a non-sequitur; the name becomes the Verilog identifier | a test asserting the message names the problem |
+| `Design::concat` folded two parts at a time without accumulating | `concat` of three or more parts **silently dropped everything after the second** — the width came out 8 instead of 12 | the three-way concat test, after the interpreter in `tests/structural.rs` made the wrong value visible |
+
+The `concat` one is the one worth remembering: its width assertion would have
+caught it, and a width assertion alone would only have caught *that* case. The
+general rule is the same one §4 and §5 keep arriving at — **assert the value, not
+just the shape.** So `tests/structural.rs` contains a small constant-folding
+interpreter and compares every structural operation against `Bits` over random
+inputs. A shift desugared into `select` plus `cat` plus a constant can have all
+the right widths and the wrong bits, and nothing else would notice until `-sim`.
+
+#### What the front end forced back into the IR
+
+Three changes, each because the DSL could not be written without them:
+
+- **`Node::Select`.** §1 requires shifts to stay structural, desugaring into
+  `select` plus `cat` plus a constant — and there was no select node. Without it
+  there is no slice, no shift, no extension, and no truncation, which is most of
+  what a datapath is.
+- **`Circuit::check_with_inputs`.** An input port is an undriven wire by
+  construction, so `check` rejected the flagship accumulator: `clk` was read and
+  undriven. Inferring ports from a name would have been a guess; the front end
+  collects the list from `Design::input` and passes it. `check` still rejects an
+  undriven wire that is *not* a port, and a test asserts that, because a blanket
+  exemption would stop catching real mistakes.
+- **`NotAConstant`.** `Design::adopt` copies a signal from another design. Only a
+  constant has a single value to copy, so anything else is refused — copying an
+  operation as zero would quietly build the wrong circuit.

@@ -105,6 +105,24 @@ pub enum Node {
         arg: NodeId,
     },
 
+    /// A contiguous run of bits: `len` bits starting at `offset`.
+    ///
+    /// There is deliberately **no shift node**. Hardcaml desugars all three shifts
+    /// into `select` plus `cat` plus a constant (`kernel/comb.ml:913-947`), and we
+    /// keep that: a shift node would make the simulator faster but would emit
+    /// Verilog the golden fixtures do not show, and shifters are better left to the
+    /// synthesiser. The shift amount is a compile-time `u32` here, never a signal —
+    /// a *variable* shift is a chain of muxes (`kernel/comb.ml:973-982`).
+    Select {
+        /// The signal being sliced.
+        value: NodeId,
+        /// Index of the lowest bit taken. Bit 0 is the least significant.
+        offset: u32,
+        /// How many bits taken, counting up from `offset`. This is the result's
+        /// width, so it is stored rather than derived.
+        len: u32,
+    },
+
     /// Bitwise AND. Requires equal widths.
     BitAnd {
         /// Left operand.
@@ -380,6 +398,7 @@ impl Node {
                 ..
             } => *width,
             Node::Not { arg } => circuit.width_of(*arg),
+            Node::Select { len, .. } => *len,
             Node::BitAnd { left, .. }
             | Node::BitOr { left, .. }
             | Node::BitXor { left, .. }
@@ -429,6 +448,7 @@ impl Node {
             Node::Constant { .. } => "Constant",
             Node::Wire { .. } => "Wire",
             Node::Not { .. } => "Not",
+            Node::Select { .. } => "Select",
             Node::BitAnd { .. } => "BitAnd",
             Node::BitOr { .. } => "BitOr",
             Node::BitXor { .. } => "BitXor",
@@ -490,6 +510,7 @@ impl Node {
                 }
             }
             Node::Not { arg } => remap!(arg),
+            Node::Select { value, .. } => remap!(value),
             Node::BitAnd { left, right }
             | Node::BitOr { left, right }
             | Node::BitXor { left, right }
@@ -554,6 +575,7 @@ impl Node {
         match self {
             Node::Constant { .. } | Node::Wire { .. } => {}
             Node::Not { arg } => out.push(*arg),
+            Node::Select { value, .. } => out.push(*value),
             Node::BitAnd { left, right }
             | Node::BitOr { left, right }
             | Node::BitXor { left, right }
