@@ -25,3 +25,32 @@ ferrite-lithic-sim = { path = "../ferrite-lithic-sim", version = "0.0.1" }
 ferrite-lithic-tb = { path = "../ferrite-lithic-tb", version = "0.0.1" }
 ferrite-lithic-wave = { path = "../ferrite-lithic-wave", version = "0.0.1" }
 proptest = "1.11"
+
+# Golden models. Every one of these is a dev-dependency on purpose: the corpus
+# exists to check the *design* against the crate that defines the algorithm, and a
+# runtime dependency on twenty implementations of twenty algorithms would be a
+# library nobody wants to depend on.
+#
+# `sha2`, `aes` and `cipher` are pinned to 0.10/0.8/0.4 rather than the newest
+# majors, whose `crypto-common` refactor changes the digest and cipher traits. The
+# older API is the one whose semantics are unambiguous, and a golden model whose API
+# is a moving target is not a golden model.
+hex = "0.4"
+base64 = "0.23"
+integer-encoding = "4"
+crc32fast = "1"
+sha2 = "0.10"
+aes = "0.8"
+cipher = "0.4"
+chacha20 = "0.9"
+ghash = "0.6"
+blake3 = "1"
+memchr = "2"
+aho-corasick = "1"
+regex-automata = "0.4"
+bitpacking = "0.9"
+roaring = "0.10"
+miniz_oxide = "0.8"
+flate2 = "1"
+rustfft = "6"
+etherparse = "0.14"
