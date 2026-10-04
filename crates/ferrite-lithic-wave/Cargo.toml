@@ -1,0 +1,19 @@
+[package]
+name = "ferrite-lithic-wave"
+description = "VCD waveforms and cycle-indexed values for the Ferrite Lithic hardware DSL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-lithic = { path = "../ferrite-lithic", version = "0.0.1" }
+ferrite-lithic-bits = { path = "../ferrite-lithic-bits", version = "0.0.1" }
+
+[dev-dependencies]
+ferrite-lithic-derive = { path = "../ferrite-lithic-derive", version = "0.0.1" }

@@ -9,12 +9,19 @@ transpiler from another language: a Rust library you call from Rust.
 Status
 ------
 
-**Phase A1, in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir`, the
-`ferrite-lithic` front end and the `ferrite-lithic-sim` cycle simulator are
-implemented and tested; the rest of the crate split below is the intended shape.
-The design notes that settle the simulator's execution model and the Verilog
-emitter's contract are in `docs/design-notes.md`, and `DETAILS.md` is the single
-place everything known lives.
+**Phase A2, in progress.** Every A1 crate is implemented and tested, and so are
+A2's three: `ferrite-lithic-derive` (port-list shapes), `ferrite-lithic-wave`
+(cycle-indexed values and VCD) and `ferrite-lithic-cosim` (Verilator
+equivalence). `ferrite-lithic-tb` is the remaining crate.
+
+Two gates depend on tools that are looked for rather than required, and both
+**print what they skipped**: `iverilog` for the A1 syntax gate and `verilator`
+for the A2 equivalence check. Install them and those tests run; leave them out and
+the rest of the suite is unchanged.
+
+The design notes that settle the simulator's execution model, the Verilog
+emitter's contract and the port-list rule are in `docs/design-notes.md`, and
+`DETAILS.md` is the single place everything known lives.
 
 ### `ferrite-lithic-bits`
 
@@ -62,9 +69,10 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-359 tests across the five crates: 96 in `ferrite-lithic-bits`, 116 in
-`ferrite-lithic-ir`, 53 in the front end, 45 in the simulator and 49 in the Verilog
-emitter. The bits crate
+471 tests across the eight crates: 96 in `ferrite-lithic-bits`, 116 in
+`ferrite-lithic-ir`, 55 in the front end, 48 in the simulator, 49 in the Verilog
+emitter, 39 in `ferrite-lithic-derive`, 41 in `ferrite-lithic-wave` and 27 in
+`ferrite-lithic-cosim`. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
@@ -243,6 +251,132 @@ means a different circuit is worse than not emitting: a literal clock, a second
 clock domain, a module with state and no clock, a whole memory used as a value, a
 port listed in both directions, and a port with no name.
 
+### `ferrite-lithic-derive`
+
+A module's interface, as a plain struct.
+
+```rust
+use ferrite_lithic::{inputs, outputs, Design, Signal};
+use ferrite_lithic_derive::PortList;
+
+#[derive(PortList)]
+struct FifoInputs {
+    #[clock] clock: Signal,
+    clear: Signal,
+    #[bits(32)] d: Signal,
+}
+
+#[derive(PortList)]
+struct FifoOutputs {
+    #[bits(32)] q: Signal,
+    #[exists] ready: Option<Signal>,
+}
+
+let design = Design::new();
+let ports = inputs::<FifoInputs>(&design).unwrap();
+assert_eq!(FifoInputs::PORT_WIDTHS, [1, 1, 32]);
+```
+
+**Direction is not inferred, and must not be.** Hardcaml's ppx does not infer it
+either: the user supplies two interface types, one for inputs and one for outputs,
+and the circuit builder sits between them. A convention on field names would be
+wrong on exactly the designs where it matters — `d` is an input on a FIFO and an
+output on a load unit — so the derive produces a *shape* (names, widths, and a
+field walk) and `inputs`/`outputs`/`wires`/`assign` materialise it into a design.
+
+| Attribute | On | Meaning |
+|---|---|---|
+| `#[bits(N)]` | field | Port width. Defaults to `1`. |
+| `#[length(N)]` | field | A collection of `N` ports. Required on a `Vec<Signal>`. |
+| `#[rtlname("x")]` | field | Verilog port name. Defaults to the field name. |
+| `#[exists]` | field | The port may be absent. Needs `Option<Signal>`. |
+| `#[clock]` | field | The module clock. At most one. |
+| `#[wave_format("hex")]` | field | `binary`, `hex` or `decimal`. Defaults to `binary`. |
+| `#[rtlprefix("p_")]` | struct | Rewrites the Verilog-facing names. |
+| `#[rtlsuffix("_q")]` | struct | As above. |
+| `#[rtlmangle]` | struct | Legalise the names for Verilog. |
+
+Two shapes rather than one is not a workaround. One design cannot hold two nodes
+with one name, so a module whose inputs and outputs are both called `d` cannot be
+declared from a single list — and it could not be declared in Verilog either.
+
+### `ferrite-lithic-wave`
+
+Cycle-indexed values, and the file they render to.
+
+```rust
+use ferrite_lithic_bits::Bits;
+use ferrite_lithic_wave::WaveData;
+
+let mut wave = WaveData::new("shifter");
+let data = wave.register("data", 8).unwrap();
+for (cycle, value) in [0x01u64, 0x02].into_iter().enumerate() {
+    wave.set(cycle as u64, &data, &Bits::constant(value, 8).unwrap()).unwrap();
+}
+let expected: Vec<Bits> = [1u64, 2]
+    .into_iter()
+    .map(|value| Bits::constant(value, 8).unwrap())
+    .collect();
+wave.assert_series(&data, &expected).unwrap();
+```
+
+Hardcaml's golden waveforms are ASCII renders from `hardcaml_waveterm`, a
+proprietary external library, so the bytes are not reproducible and we do not try.
+What *is* reproducible is the per-cycle data, and that is the first-class value
+here: assertions read `value`/`series`, and `Vcd` is a rendering of that data
+rather than the source of it. A test that asserted on a rendered waveform would
+be asserting on the renderer.
+
+No `$date` in the file, and positional identifiers rather than names derived from
+signals: two runs of one design produce the same bytes, and two ports whose names
+legalise alike can both be dumped.
+
+### `ferrite-lithic-cosim`
+
+The emitted Verilog, checked against the simulator, cycle by cycle.
+
+```rust
+use ferrite_lithic_bits::Bits;
+use ferrite_lithic_cosim::{Plan, Port, Stimulus, compare};
+
+let plan = Plan {
+    top: "passthrough".to_string(),
+    clock: Some("clk".to_string()),
+    inputs: vec![Port { name: "d".to_string(), width: 8 }],
+    outputs: vec![Port { name: "q".to_string(), width: 8 }],
+};
+
+let mut stimulus = Stimulus::new();
+let value = Bits::constant(0xa5, 8).unwrap();
+stimulus.push(vec![value.clone()]).unwrap();
+
+// `run_with` needs a built `Harness`, which costs seconds of Verilator build
+// time; `run` builds one. `compare` needs neither and is pure.
+let simulator = vec![vec![value]];
+let report = compare(&plan.output_names(), &simulator, &simulator).unwrap();
+assert!(report.is_equivalent());
+```
+
+Verilator arrives here, as ADR-0010 deferred it. Hardcaml's harness lives in the
+separate `janestreet/hardcaml_verilator` repository, so this is net-new work. The
+crate is arranged so that **only** the Verilator build and run need the toolchain:
+the stimulus encoding, the generated C++ driver, the comparison and its reporting
+are ordinary Rust that the suite exercises unconditionally. The equivalence tests
+skip — loudly, on stdout — when `verilator` is absent.
+
+One cycle is: clock low, inputs applied, clock high, evaluate, read. The read is
+*after* the rising edge, which is `Sim::step`'s second snapshot; reading before the
+edge would put the two backends a register update apart on every registered port.
+Registers start at zero in both, which is a property of the two tools and is said
+in the generated driver rather than assumed quietly.
+
+`generator` is Hardcaml's `test/lib/generator.ml` ported: weighted op choices,
+widths from `[1; 2; 3; 64; 100]`, feedback registers, multiport memories, and a
+seed that makes a design a pure function of its seed. Its two carries-over are both
+checks on the *generator*: a design is a pure function of its seed, and more than
+two thirds of a fixed-seed corpus must produce a changing output — a generator that
+produced constants would make the differential pass by never disagreeing.
+
 ### `ferrite-lithic-ir`
 
 The signal graph: an arena of nodes whose identity is the arena index, and the
@@ -317,9 +451,9 @@ Crate layout
 | `ferrite-lithic` | Front-end DSL: `Signal` handle with operator overloads and builder functions | A1 **done** |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 **done** |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 **done** |
-| `ferrite-lithic-derive` | `#[derive]` for port-list structs, `map`/`iter`/`of_signal` | A2 |
-| `ferrite-lithic-wave` | VCD waveform writer | A2 |
-| `ferrite-lithic-cosim` | Verilator equivalence checking against `ferrite-lithic-sim` | A2 |
+| `ferrite-lithic-derive` | `#[derive(PortList)]`: a module interface's names and widths from a struct | A2 **done** |
+| `ferrite-lithic-wave` | Cycle-indexed values, asserted on directly, plus a VCD rendering | A2 **done** |
+| `ferrite-lithic-cosim` | Verilator equivalence checking against `ferrite-lithic-sim` | A2 **done** |
 | `ferrite-lithic-tb` | Coroutine/async-style step testbenches | A3 |
 
 Design decisions

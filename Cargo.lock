@@ -56,7 +56,9 @@ name = "ferrite-lithic"
 version = "0.0.1"
 dependencies = [
  "ferrite-lithic-bits",
+ "ferrite-lithic-derive",
  "ferrite-lithic-ir",
+ "ferrite-lithic-rtl",
  "proptest",
 ]
 
@@ -67,6 +69,31 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "proptest",
+]
+
+[[package]]
+name = "ferrite-lithic-cosim"
+version = "0.0.1"
+dependencies = [
+ "ferrite-lithic",
+ "ferrite-lithic-bits",
+ "ferrite-lithic-derive",
+ "ferrite-lithic-ir",
+ "ferrite-lithic-rtl",
+ "ferrite-lithic-sim",
+ "ferrite-lithic-wave",
+ "proptest",
+]
+
+[[package]]
+name = "ferrite-lithic-derive"
+version = "0.0.1"
+dependencies = [
+ "ferrite-lithic",
+ "ferrite-lithic-rtl",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -92,9 +119,21 @@ version = "0.0.1"
 dependencies = [
  "ferrite-lithic",
  "ferrite-lithic-bits",
+ "ferrite-lithic-cosim",
+ "ferrite-lithic-derive",
  "ferrite-lithic-ir",
  "ferrite-lithic-rtl",
+ "ferrite-lithic-wave",
  "proptest",
+]
+
+[[package]]
+name = "ferrite-lithic-wave"
+version = "0.0.1"
+dependencies = [
+ "ferrite-lithic",
+ "ferrite-lithic-bits",
+ "ferrite-lithic-derive",
 ]
 
 [[package]]

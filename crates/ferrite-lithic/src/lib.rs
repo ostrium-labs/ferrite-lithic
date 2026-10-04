@@ -96,10 +96,50 @@
 //! truncates the value. That is stated rather than hidden because it is the one
 //! place a caller can lose information without an error.
 
+// # Port lists
+//
+// [`PortList`] is the shape of a module interface: names and widths, no
+// direction. `#[derive(PortList)]` lives in `ferrite-lithic-derive`; the trait
+//! and the four functions that materialise a shape into a design
+//! ([`inputs`], [`outputs`], [`wires`], [`assign`]) live here because they need
+//// [`Design`] and because a proc-macro crate cannot export a trait.
+//!
+//! ```
+//! use ferrite_lithic::{inputs, outputs, Design};
+//! use ferrite_lithic_derive::PortList;
+//!
+//! #[derive(PortList)]
+//! struct LaneInputs {
+//!     #[bits(8)] a: ferrite_lithic::Signal,
+//!     #[bits(8)] b: ferrite_lithic::Signal,
+//! }
+//!
+//! #[derive(PortList)]
+//! struct LaneOutputs {
+//!     #[bits(8)] y: ferrite_lithic::Signal,
+//! }
+//!
+//! # fn main() -> Result<(), ferrite_lithic::PortError> {
+//! let design = Design::new();
+//! let in_ports = inputs::<LaneInputs>(&design)?;
+//! let y = &in_ports.a + &in_ports.b;
+//! let _out_ports = outputs::<LaneOutputs>(&design, &LaneOutputs { y })?;
+//! # Ok(())
+//! # }
+//! ```
+
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod design;
 mod ops;
+mod ports;
+
+#[doc(hidden)]
+pub mod __private;
 
 pub use design::{Design, Error, Signal};
+pub use ports::{
+    Error as PortError, PortList, WaveFormat, assign, check_width, inputs, outputs, take_many,
+    take_one, wires,
+};

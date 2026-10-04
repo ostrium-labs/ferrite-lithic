@@ -308,6 +308,28 @@ fn is_reserved(name: &str) -> bool {
     RESERVED.iter().any(|word| word.eq_ignore_ascii_case(name))
 }
 
+/// The emitter's legalisation with no pool, for a name that must stay exactly as
+/// written.
+///
+/// # Why this is a public entry point
+///
+/// A port list's Verilog names have to be rewritten the same way every signal
+/// name is, or a module declares a port that cannot be connected. That rewrite
+/// cannot live in `ferrite-lithic`, where the shape is declared, because the
+/// legalisation rules and the reserved words they avoid belong to the emitter.
+/// So `#[rtlmangle]` on a port list calls this.
+///
+/// No pool, deliberately. Port names are per-module and a module's port list is
+/// what an instantiation site binds to, so a name that gets a numeric suffix
+/// because some *other* name in the same scope claimed its legal form would be a
+/// port that moved. Two ports that both legalise to the same thing are a genuine
+/// collision in the user's interface, and the right answer is for that to be an
+/// error rather than for the emitter to silently renumber one of them.
+#[must_use]
+pub fn mangle_port_name(name: &str) -> String {
+    legalise(name)
+}
+
 /// A legal, non-reserved identifier built from `name`.
 ///
 /// Every character outside `[A-Za-z0-9_$]` becomes `_`, a leading digit gets a `_`

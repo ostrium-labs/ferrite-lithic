@@ -45,9 +45,9 @@ written to be extended if code or vectors are ever derived rather than rewritten
 | `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 **done** |
 | `ferrite-lithic-sim` | Cycle simulator: word addresses and an interpretable op list | A1 **done** |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 **done** |
-| `ferrite-lithic-derive` | `#[derive]` for port-list structs | A2 |
-| `ferrite-lithic-wave` | VCD waveform writer | A2 |
-| `ferrite-lithic-cosim` | Verilator equivalence against `ferrite-lithic-sim` | A2 |
+| `ferrite-lithic-derive` | `#[derive(PortList)]`: a module interface's names and widths | A2 **done** |
+| `ferrite-lithic-wave` | Cycle-indexed values and a VCD rendering of them | A2 **done** |
+| `ferrite-lithic-cosim` | Verilator equivalence against `ferrite-lithic-sim` | A2 **done** |
 | `ferrite-lithic-tb` | Coroutine-style step testbenches | A3 |
 
 ### What `ferrite-lithic-bits` actually does
@@ -672,3 +672,151 @@ compare them, and `Circuit` has no `PartialEq`, so identity here is the name plu
 the port signature. Two different circuits with the same name *and* the same ports
 collapse to the first, undetected. Giving `Circuit` a `PartialEq` is the fix, and it
 belongs to the IR crate rather than here.
+
+## What A2 settled
+
+### A port list is a shape, and the two sides are two shapes
+
+The design notes' §5 said the derive must not infer direction, and that stands.
+What A2 settled is what the *replacement* for Hardcaml's `kernel/interface_intf.ml`
+functor looks like in Rust, and the answer turned out to be two structs rather than
+one.
+
+The first version of the tests used one shape for both sides — the note's wording,
+"the user instantiates it twice" — and the doctest failed:
+
+```
+Error: Design(Ir(DuplicateName { name: "a", first: n0, second: n4 }))
+```
+
+which is the correct answer. One design cannot hold two nodes called `a`, and a
+Verilog port list cannot declare `a` twice either. A module whose inputs and
+outputs have different names — which is to say nearly every module — therefore
+needs two shapes, one per side, and Hardcaml has exactly that: a separate `i` and
+`o` interface type with the builder between them. The note's phrasing survives only
+as the reason the derive is *not* given a direction rule.
+
+Two consequences that are now enforced rather than documented:
+
+- `#[rtlmangle]` calls `ferrite-lithic-rtl`'s `mangle_port_name`, a public wrapper
+  over the emitter's legalisation. Port names must be rewritten by the same rules
+  as signal names, and the reserved-word list lives in the emitter, so the shape
+  cannot do it itself. It cannot be a `const` either — legalisation is a function
+  call — which is why `PORT_NAMES` is the declared names and `rtl_names()` is the
+  Verilog-facing ones.
+- Name collisions among a shape's own ports are a **compile** error, checked by the
+  derive before any `set_name`. Catching it at runtime would have put the failure in
+  the emitter's error path, naming two field indices the caller never wrote.
+
+`#[exists]` needed the most thought, because "this port may be absent" and "this
+port does not exist" are different facts and a shape that conflates them cannot
+describe two modules. The resolution is three constructors rather than one:
+`from_signals` for a list where every declared port is present, `from_present` for a
+module without the optional ones, and `from_pattern(signals, present)` for the
+general case. `present()` reads the pattern back. A *required* port marked absent is
+`PortError::NotOptional` rather than a silent skip, because a caller who thinks a
+plain port is optional has a bug and this is the last place it can still be named.
+
+### The waveform is the data, and the file is a rendering
+
+Hardcaml's golden waveforms come from `hardcaml_waveterm`, an external proprietary
+library (`README.md:112-114`). Substituting the per-cycle data was already the plan;
+what A2 settled is that the substitution is *structural* rather than a matter of
+which assertions get written. `WaveData` holds a column per signal and `Vcd` renders
+it. So a bug in the writer cannot make a design look correct, and a change in
+rendering style cannot fail a behavioural test — neither of which holds if the file
+is the thing tests read.
+
+Three details the format forced:
+
+- **No `$date`.** Two runs of one design must produce the same bytes or a golden
+  file is a test of the clock. A `$comment` in the file says why.
+- **Identifiers are positional.** VCD refers to a signal by an identifier code and
+  keeps the name as documentation, so deriving the code from the name would mean two
+  ports whose names legalise alike cannot both be dumped.
+- **`wave_format` cannot change the file.** VCD's value-change syntax has exactly
+  three scalar forms and none of them is hex or decimal. So a `#[wave_format("hex")]`
+  port is written as binary — the only vector form a viewer will read — and the hex
+  rendering is produced by `render_value`, which is what a test asserts on. All the
+  file does with the format is the `$var` range annotation. An earlier version tried
+  to make hex a real encoding and had to be walked back.
+
+A one-bit signal gets no range annotation, which the first golden caught: `[0:0]` is
+noise on a scalar and every viewer reads one without it.
+
+### Cosimulation compares after the edge, and both backends own the clock
+
+`Sim::step` drives the clock itself — high, settle, commit, low, settle — so one step
+*is* one rising edge, whatever the stimulus says. The generated Verilator driver does
+clock low, inputs, clock high, evaluate. Both produce exactly one rising edge per
+cycle, so they agree; but the asymmetry is invisible unless it is written down, and
+the stimulus's clock column is therefore documentation rather than data.
+
+The read is *after* the rising edge, because that is the only boundary both backends
+can be made to agree about. Reading before would put the simulator's `before` against
+Verilator's `after` and report a divergence on every registered port.
+
+Registers start at zero in both — Verilator zero-initialises, `Sim` allocates
+zero-filled — which is a property of the two tools and not of the design. It is
+stated in the generated C++ rather than assumed quietly.
+
+The harness drives ports up to 64 bits wide, and says so with a `static_assert` in the
+generated source rather than a runtime check. Truncating a wide port would make a wide
+design cosimulate against the wrong thing, and the failure would show up three cycles
+later as a divergence that looks like a design bug.
+
+### The split that makes cosim testable without Verilator
+
+Verilator is a vendor toolchain most contributors will not have, and a crate that
+only tests itself where the tool is installed is a crate that is mostly untested. So
+the crate is arranged so that only two functions need it:
+
+| Needs Verilator | Does not |
+|---|---|
+| `Harness::build` | `driver_source` — the generated C++, a pure function of the `Plan` |
+| `Harness::run` | `Stimulus::encode` / `parse_hex` — the wire format both sides share |
+| | `compare` — the comparison and its failure reporting |
+| | `simulate` — the simulator's side, so the expected values are computed anyway |
+| | `generator` — the random designs and their quality guard |
+
+So the parts with arithmetic in them are checked unconditionally, and the tests that
+need the tool print their skip. The same trade as the Icarus gate, and the same rule
+about silence: a suite that is green because it checked nothing must say so.
+
+### The generator, and what it found immediately
+
+Porting `test/lib/generator.ml` found a bug in the generator within one run, which is
+the argument for having written it. The first version kept one pool of signals and
+picked two operands from it, and `mul` widens to twice the operand width — so the
+pool held two widths and the third operation was
+
+```
+WidthMismatch { op: Ult, lhs: 8, rhs: 16 }
+```
+
+every time. The fix is a width-tagged pool and a `pick_same_width` that picks two
+operands of the *same* width, with a fallback to the one signal when the pool has only
+one of that width. A generator whose operands disagree on width is testing the front
+end's width check, not the emitter.
+
+The other thing it found is that a width above 64 has to be built from words. A
+single `u64` extended to 100 bits gives a random low word and a zero high half, every
+time, and the generator-quality guard would then pass for the wrong reason — the
+outputs would look constant only in the high bits. There is a test for exactly that,
+because it is the kind of quiet failure a "random" generator produces.
+
+Memory ports needed the same care: a memory's data width is fixed at construction, so
+the write port's data is explicitly extended or truncated rather than hoped for, and
+the read port's width is whatever the memory says rather than what the pool held.
+
+### What is still not covered
+
+The Verilator path is **written but not run here**: `verilator` is not installed on
+the machine this was built on, so `tests/equivalence.rs` prints its skip and the
+generated C++ has never been compiled. The driver is checked as *text* — its phase
+order, its masks, its refusal of a wide port — which is most of what can go wrong
+without a compiler, but "checked as text" is not "compiles". Installing `verilator` and
+running the suite is the next thing to do.
+
+`ferrite-lithic-tb` (A3) is not started. Nothing in A2 depends on it, and the
+assertions it would replace are currently written directly against `WaveData`.

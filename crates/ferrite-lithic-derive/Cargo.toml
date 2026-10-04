@@ -1,6 +1,6 @@
 [package]
-name = "ferrite-lithic"
-description = "The front-end DSL for Ferrite Lithic: build a circuit by writing arithmetic"
+name = "ferrite-lithic-derive"
+description = "#[derive(PortList)] for the Ferrite Lithic hardware DSL"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -11,11 +11,14 @@ authors.workspace = true
 [lints]
 workspace = true
 
+[lib]
+proc-macro = true
+
 [dependencies]
-ferrite-lithic-bits.workspace = true
-ferrite-lithic-ir.workspace = true
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full", "extra-traits"] }
 
 [dev-dependencies]
-ferrite-lithic-derive = { path = "../ferrite-lithic-derive", version = "0.0.1" }
+ferrite-lithic = { path = "../ferrite-lithic", version = "0.0.1" }
 ferrite-lithic-rtl = { path = "../ferrite-lithic-rtl", version = "0.0.1" }
-proptest = "1.11"

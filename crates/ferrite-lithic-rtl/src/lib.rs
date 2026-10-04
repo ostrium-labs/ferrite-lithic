@@ -106,3 +106,4 @@ mod naming;
 pub use emit::emit_library;
 pub use error::Error;
 pub use module::{Direction, Module, PortNames, Signature};
+pub use naming::mangle_port_name;

@@ -17,7 +17,9 @@ install, and it catches malformed output immediately.
 
 CI runs `iverilog -t null -g2012` on emitted Verilog in A1, as Hardcaml does.
 
-Verilator arrives in A2 with `ferrite-lithic-cosim`. That harness does not exist
+Verilator arrives in A2 with `ferrite-lithic-cosim`, and ADR-0018 records what
+that harness had to decide about the cycle boundary and the reset state. That
+harness does not exist
 upstream: Verilator support lives in the separate `janestreet/hardcaml_verilator`
 repository, so `ferrite-lithic-cosim` is net-new work. Natural first targets are
 register and memory designs, which already have a definition and expected output.
