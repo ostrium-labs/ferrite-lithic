@@ -1,0 +1,46 @@
+Ferrite Lithic
+Copyright 2026 The Ferrite Authors
+
+This product includes software developed by The Ferrite Authors.
+
+Portions of this product may be derived from third-party open-source projects.
+Each such portion is identified in the source file header and listed below
+together with its license and attribution notice.
+
+Third-party attributions
+------------------------
+
+Hardcaml (https://github.com/janestreet/hardcaml), MIT License, Copyright (c)
+2018--2026 Jane Street Group, LLC <opensource-contacts@janestreet.com>. This is
+the design reference for Ferrite Lithic: the signal-graph model, the treatment
+of combinational cycles, the separation of a cycle simulator from RTL emission,
+and the port-list/derive model. Studied at revision ff4fe60 (v0.18~preview).
+
+No Hardcaml source code has been copied into this repository as of this
+notice. The port takes the architecture and the semantics and writes the
+implementation and the tests from the documented behaviour. If code or test
+vectors are ever derived rather than rewritten, the specific files and the
+Hardcaml revision will be listed here, and the MIT notice retained:
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+LLVM (https://llvm.org), Apache License 2.0 with LLVM Exceptions. Referenced as
+a design reference for the possible FIRRTL/CIRCT route recorded in
+docs/design-notes.md. Not vendored and not linked; the Verilog emitter in
+Phase A1 is our own.
