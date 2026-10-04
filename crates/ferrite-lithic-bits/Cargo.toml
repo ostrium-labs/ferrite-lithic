@@ -1,0 +1,19 @@
+[package]
+name = "ferrite-lithic-bits"
+description = "Fixed-width bitvectors for the Ferrite Lithic hardware DSL"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+num-bigint = "0.4"
+num-traits = "0.2"
+proptest = "1.11"

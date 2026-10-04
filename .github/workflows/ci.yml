@@ -1,0 +1,79 @@
+name: ci
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref: this repo is small and a stale run is
+# never useful.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fails CI on warnings anywhere, which is what makes the lint table in
+  # Cargo.toml load-bearing rather than decorative.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: rustup show
+        run: rustup show active-toolchain
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo test
+        run: cargo test --workspace --all-features --locked
+
+  doc:
+    name: doc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo doc
+        run: cargo doc --workspace --no-deps --all-features --locked
+
+  # The crate declares rust-version 1.97 and pins an exact channel in
+  # rust-toolchain.toml. This job checks the *minimum* declared version still
+  # builds, which is a different promise from "the pinned version builds".
+  msrv:
+    name: msrv (1.97)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+      - name: cargo check
+        run: cargo check --workspace --all-targets --all-features --locked
+
+  deny:
+    name: supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

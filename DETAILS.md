@@ -7,7 +7,9 @@ Everything known about this project in one place. Companion documents:
 - `docs/adr/` — 17 accepted architecture decision records
 - `../ferrite-strata/DETAILS.md` — the companion runtime
 
-Status: **Phase 0 complete**, design settled, no crates published yet.
+Status: **Phase A1 in progress.** `ferrite-lithic-bits` is implemented, documented
+and tested (95 tests); the remaining A1 crates — `-ir`, the DSL front end, `-sim`
+and `-rtl` — are not yet written. Nothing is published to crates.io yet.
 
 ## 1. What it is
 
@@ -37,7 +39,7 @@ written to be extended if code or vectors are ever derived rather than rewritten
 
 | Crate | Purpose | Phase |
 |---|---|---|
-| `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 |
+| `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
 | `ferrite-lithic-ir` | Arena of nodes with `NodeId`, wires resolved after construction | A1 |
 | `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 |
 | `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
@@ -46,6 +48,41 @@ written to be extended if code or vectors are ever derived rather than rewritten
 | `ferrite-lithic-wave` | VCD waveform writer | A2 |
 | `ferrite-lithic-cosim` | Verilator equivalence against `ferrite-lithic-sim` | A2 |
 | `ferrite-lithic-tb` | Coroutine-style step testbenches | A3 |
+
+### What `ferrite-lithic-bits` actually does
+
+Written to §4 and ADR-0003/0009 above, not to the plan. Representation is
+`{ width: u32, words: Vec<u64> }` with `ceil(width / 64)` words, and one invariant:
+**bits above the width in the top word are always zero**. Every value funnels
+through a single private masking constructor, and every public method debug-asserts
+the invariant at its own entry rather than relying on the caller.
+
+Beyond the inherited semantics it adds `udiv`, `sdiv`, `urem` and `srem` (ADR-0009),
+and three decisions that upstream does not make:
+
+- **Division by zero is an error, not a wrap or a saturate.** Hardware has no
+  defined result, so returning one would be inventing semantics.
+- **Signed division overflow is an error.** `-2^(w-1) / -1` needs one more bit than
+  the operands have. Verilog returns `-2^(w-1)`; we refuse, because silently
+  returning the wrapped value is the exact bug class this crate exists to prevent.
+  `srem` cannot overflow, so it still answers zero for that input.
+- **Every width error names both widths and names the fix.** That is the whole
+  compensation for giving up const generics, and `tests/errors.rs` fails if any
+  message is shortened to "width mismatch".
+
+**Four bugs were found by the test layers, all in code that looked right.** Worth
+recording because each one was invisible to the layer below it:
+
+| Bug | Symptom | Caught by |
+|---|---|---|
+| `is_ones` compared each raw word against its *masked* form | Always returned `true`, silently disabling the signed-overflow guard | exhaustive enumeration to width 6 |
+| `cmp_signed` reversed two-negative comparisons | Put `-1` below `-2^128` | property test at width 129 |
+| `magnitude()` negated *after* zero-extending | Gave `2^(w+1) - v` instead of `2^w - v`, wrong for every negative value except `-1` | exhaustive enumeration |
+| `sign_extend` filled whole words, so widening inside one word did nothing | `sign_extend(6)` of a 2-bit `0b11` returned `3`, not `63` | doctest |
+
+The lesson is the same one §5 records about Hardcaml's multiply: **at these
+widths, assuming a word boundary is an assumption.** The exhaustive layer exists
+because random sampling found none of the first three.
 
 ## 4. Design, and where it came from
 

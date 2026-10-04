@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.97"
+license = "Apache-2.0"
+repository = "https://github.com/ostrium-labs/ferrite-lithic"
+authors = ["Dinakaran V <112177746+dina-kar@users.noreply.github.com>"]
+
+[workspace.dependencies]
+ferrite-lithic-bits = { path = "crates/ferrite-lithic-bits", version = "0.0.1" }
+
+[workspace.lints.rust]
+# `deny`, deliberately not `forbid`. `forbid` cannot be overridden by a local
+# `#[allow]` at all, which would make it impossible to write the Verilator FFI in
+# ferrite-lithic-cosim, or any raw-memory fast path in the simulator, even with a
+# written justification. `deny` still requires an explicit, greppable opt-out at
+# every site, so `unsafe` stays reviewable rather than becoming ambient.
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+# `warn`, not `deny`. Hardware-adjacent Rust legitimately unwraps: in `const`
+# contexts, in tests where a failure should panic loudly, and where an operation
+# is infallible by construction. Library code should still prefer `expect` with a
+# message so a panic says what went wrong; test files opt out explicitly at the
+# top of the file rather than weakening this globally.
+unwrap_used = "warn"
+
+[profile.dev]
+debug = "line-tables-only"
