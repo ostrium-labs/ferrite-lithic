@@ -7,10 +7,10 @@ Everything known about this project in one place. Companion documents:
 - `docs/adr/` — 17 accepted architecture decision records
 - `../ferrite-strata/DETAILS.md` — the companion runtime
 
-Status: **Phase A1 in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir` and
-the `ferrite-lithic` front end are implemented, documented and tested (264 tests);
-the remaining A1 crates — `-sim` and `-rtl` — are not yet written. Nothing is
-published to crates.io yet.
+Status: **Phase A1 in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir`, the
+`ferrite-lithic` front end and the `ferrite-lithic-sim` cycle simulator are
+implemented, documented and tested (309 tests); the remaining A1 crate, `-rtl`, is
+not yet written. Nothing is published to crates.io yet.
 
 ## 1. What it is
 
@@ -43,8 +43,7 @@ written to be extended if code or vectors are ever derived rather than rewritten
 | `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
 | `ferrite-lithic-ir` | Arena of nodes with `NodeId`, wires resolved after construction | A1 **done** |
 | `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 **done** |
-| `ferrite-lithic` | Front-end DSL: `Signal` with operator overloads and builders | A1 |
-| `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
+| `ferrite-lithic-sim` | Cycle simulator: word addresses and an interpretable op list | A1 **done** |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
 | `ferrite-lithic-derive` | `#[derive]` for port-list structs | A2 |
 | `ferrite-lithic-wave` | VCD waveform writer | A2 |
@@ -493,3 +492,95 @@ Three changes, each because the DSL could not be written without them:
 - **`NotAConstant`.** `Design::adopt` copies a signal from another design. Only a
   constant has a single value to copy, so anything else is refused — copying an
   operation as zero would quietly build the wrong circuit.
+
+## What the cycle simulator settled
+
+`ferrite-lithic-sim` compiles a `Circuit` into word addresses and an `Op` list,
+then steps it. Three decisions in it are worth writing down, and so are the four
+bugs that the tests found, because three of those four were invisible in the code.
+
+### Counting has to come before placing
+
+The flat buffer is partitioned into sections in a fixed order — comb, regs,
+regs_next, mems, consts — so a node's absolute word depends on the size of every
+section in front of it. Placing as the allocator walks therefore does not work: a
+memory visited early does not yet know how wide the combinational logic ahead of
+it turned out to be.
+
+The first version did exactly that, and the counters started at zero. Registers and
+memories were addressed at word 0, on top of the combinational section. Every
+signal still had a plausible address and every test still compiled; the accumulator
+simply never moved. The fix is to count words per section first and assign absolute
+addresses in a second pass, in arena order so the layout stays canonical.
+
+The lesson is the same one as everywhere else in this file: **a wrong word address
+is not a crash, it is a plausible number**, and the only thing that catches it is an
+assertion about behaviour rather than about shape.
+
+### Two implementations per operation, deliberately
+
+Every operation has a hand-written `u64` path for values that fit in one word, and
+a fallback through `Bits`. That looks like duplication and is the opposite: the fast
+path exists because nearly every signal is one word wide and a `Bits` operation
+allocates, and the slow path exists because add-with-carry and schoolbook multiply
+are already written, already property-tested, and already agreed on by the rest of
+the stack. Duplicating them to save an allocation would have put two
+implementations of the same semantics in the tree, which is precisely the thing §7
+of the design notes refuses to inherit from Hardcaml.
+
+`tests/ops.rs` checks both paths against `Bits` over widths 1..=200. The upper end
+matters because the boundary between the paths is at width 65, so a range that
+stopped at 64 would only ever exercise the fast one; the lower end matters because
+Hardcaml's multiply assumes operands span two words with no assertion, covered only
+by an empirical sweep.
+
+### Refusing beats guessing, three times over
+
+`Instance`, a second clock, and division by zero are all errors rather than
+answers. The reasoning is the same in each case: the alternative produces a
+simulation of a circuit the user did not write, and it does so *quietly*. An
+instance treated as a constant zero still passes every test in this file.
+
+Division by zero is the sharpest of the three, because emitted Verilog answers `x`
+and a two-state simulator cannot. Refusing keeps the mistake visible; answering zero
+would hide it until the RTL disagreed. That disagreement is real and will have to be
+handled in `ferrite-lithic-cosim`, which is where it belongs.
+
+### The four bugs
+
+| Bug | Symptom | Caught by |
+|---|---|---|
+| Section cursors started at zero | Every register and constant sat on top of the combinational section; the accumulator never moved | the first smoke test, which was the whole design |
+| The constant section was allocated but never written | `add` read a literal of zero, so `x + 1` was `x` | the same smoke test, printed as a buffer dump |
+| The ten comparisons stored their *result* width instead of their operand width | `sle` sign-extended from **1 bit** rather than 2, so `-1 <= -2` was true | the differential property, at width 2 |
+| `select`'s fast path checked that the *result* was one word, not that the *window* was inside the first | a 66-bit value sliced at 47 for 18 bits lost its top bit | the same property, at width 66 |
+
+The third is the one that would have survived longest. A comparison is one bit wide,
+and the code storing "the width of this node" looked obviously right. Signed
+arithmetic needs the width of the values being reinterpreted, which is a different
+number, and the two agree for every operation except comparisons.
+
+The fourth is the general shape of this kind of bug: the fast path's guard has to be
+about the thing the fast path actually assumes. Here it assumed the *result* fit in
+a word, which is true, and read a single word, which is only true when the *window*
+is inside the first.
+
+### The generator, and guarding the generator
+
+Hardcaml's random-circuit generator lifts almost directly, and the design notes
+call the result the highest-value test in the suite. What lifts here is the
+generator-quality guard rather than the differential test, because we have no second
+graph to compare against yet: Hardcaml uses its generator to check deduplicated
+against non-deduplicated circuits, we have no deduplication, and the comparison that
+matters — the simulator against emitted Verilog — waits for `-rtl` and `-cosim`.
+
+The guard is the half that survives. A random-circuit test that generates only
+trivial circuits asserts nothing while looking rigorous, so the fixed seed `0x3eadbeef`
+is run over 1000 circuits and more than two thirds of them must produce a changing
+output. That threshold is a property of the generator, not of the simulator, and it
+is the thing that would rot silently.
+
+One narrowing came out of writing it: division is weighted down and its denominator
+is forced non-zero. A uniform choice over fourteen operations spends an embarrassing
+fraction of a run dividing by zero, which tests the refusal path very well and
+nothing else.

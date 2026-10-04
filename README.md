@@ -9,9 +9,9 @@ transpiler from another language: a Rust library you call from Rust.
 Status
 ------
 
-**Phase A1, in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir` and the
-`ferrite-lithic` front end are implemented and tested; the rest of the crate
-split below is the intended shape.
+**Phase A1, in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir`, the
+`ferrite-lithic` front end and the `ferrite-lithic-sim` cycle simulator are
+implemented and tested; the rest of the crate split below is the intended shape.
 The design notes that settle the simulator's execution model and the Verilog
 emitter's contract are in `docs/design-notes.md`, and `DETAILS.md` is the single
 place everything known lives.
@@ -62,8 +62,8 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-264 tests across the three crates: 95 in `ferrite-lithic-bits`, 116 in
-`ferrite-lithic-ir`, 53 in the front end. The bits crate
+309 tests across the four crates: 96 in `ferrite-lithic-bits`, 116 in
+`ferrite-lithic-ir`, 53 in the front end and 44 in the simulator. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
@@ -118,6 +118,64 @@ nesting possible. The `RefCell` is quarantined to the builder: a `Signal` is a
 node id and a cached width with no reference *into* the arena, so the graph stays
 cheap to traverse, and every borrow is taken and released inside one method body
 that cannot re-enter.
+
+### `ferrite-lithic-sim`
+
+The cycle simulator: compile a graph to word addresses, then step it.
+
+```rust
+use ferrite_lithic::Design;
+use ferrite_lithic_sim::Sim;
+
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let d = Design::new();
+
+let clk = d.input("clk", 1)?;
+let acc = d.wire(8)?;
+let next = d.add(&acc, &d.lit(1, 8)?)?;
+let next = d.reg(&next, &clk, &d.constant(false), &d.constant(false))?;
+d.drive(&acc, &next)?;
+d.output("acc", 8, &acc)?;
+
+let mut sim = Sim::new(&d)?;
+let (before, after) = sim.step()?;
+assert_eq!(after.get("acc").unwrap().to_u64().unwrap(), 1);
+println!("{before} | {after}");
+# Ok(())
+# }
+```
+
+**A cycle is three phases, and two of them settle the net.** `before_clock_edge`
+drives the clock high and snapshots, `at_clock_edge` commits registers and
+memories, `after_clock_edge` drives the clock low and snapshots again. Both
+snapshots are first-class values: `before` is what the outputs were, `after` is
+what the edge made them, which is how you watch a register change on the edge it
+changes.
+
+**Registers are written twice on purpose.** Every register's next value goes into
+a shadow section, and then the whole section is copied over the live one. Writing
+in place would make each register depend on the order registers are visited in, and
+a chain of registers would shift one cycle *per register* rather than once per
+design. `tests/cycles.rs` has a two-register chain that fails if that is wrong.
+
+**Operations are an inspectable `enum`, not closures.** Hardcaml compiles each
+node to an OCaml closure; we compile to an `Op` carrying word addresses and
+interpret it with a `match`. Same execution model, no `dyn`, and the list can be
+read — which is what makes comparing two simulators, or this one against emitted
+Verilog, possible at all.
+
+**Each operation has two implementations, on purpose.** A hand-written `u64` path
+for values that fit in one word, and a fallback through `Bits` for the rest. Nearly
+every signal is one word wide and a `Bits` operation allocates; but writing
+add-with-carry and schoolbook multiply again here to save that one allocation would
+mean two implementations of the same semantics. The property test over widths
+1..=200 checks both paths against `Bits`, so the fast path is not trusted for being
+fast.
+
+**Three things are refused rather than approximated**, because a wrong answer that
+looks right is worse than no answer: a submodule `Instance` with no model, a design
+with two clocks, and division by zero. Emitted Verilog answers `x` for the last
+one and a two-state simulator has no `x` to give, so it is reported instead.
 
 ### `ferrite-lithic-ir`
 
@@ -191,7 +249,7 @@ Crate layout
 | `ferrite-lithic-bits` | Fixed-width bitvectors over `u64` words, runtime widths | A1 **done** |
 | `ferrite-lithic-ir` | Signal graph: arena of nodes, `NodeId` indices, wires resolved after construction so cycles are legal | A1 **done** |
 | `ferrite-lithic` | Front-end DSL: `Signal` handle with operator overloads and builder functions | A1 **done** |
-| `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 |
+| `ferrite-lithic-sim` | Cycle simulator over a flat, topologically sorted op list | A1 **done** |
 | `ferrite-lithic-rtl` | Verilog emitter with stable naming | A1 |
 | `ferrite-lithic-derive` | `#[derive]` for port-list structs, `map`/`iter`/`of_signal` | A2 |
 | `ferrite-lithic-wave` | VCD waveform writer | A2 |

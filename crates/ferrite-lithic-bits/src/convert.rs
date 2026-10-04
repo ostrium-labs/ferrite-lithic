@@ -91,6 +91,55 @@ impl Bits {
         Ok(Bits::from_words(width, words))
     }
 
+    /// Copies `width` bits out of a little-endian word slice.
+    ///
+    /// This is how a caller holding words it does not own — the simulator's flat
+    /// buffer, above all — gets a value it can do arithmetic on. The word count
+    /// is fully determined by the width, so it must be exact; see
+    /// [`words_for_width`].
+    ///
+    /// # It copies, and that is deliberate for now
+    ///
+    /// A borrowing constructor would be the obvious next step, but a borrowed
+    /// value is a *second type*: `Bits` carries an owned `Vec<u64>`, and giving
+    /// it a borrowed twin means duplicating or abstracting every operation in the
+    /// crate. That is not a change worth making speculatively. The consumer that
+    /// motivates this — the cycle simulator — keeps its own `u64` fast path for
+    /// values of 64 bits or fewer, which is nearly all of them, and pays the copy
+    /// only for genuinely wide values.
+    ///
+    /// Bits above `width` in the final word are **ignored**, exactly as in
+    /// [`from_bytes_le`](Self::from_bytes_le). That is what makes a whole-word
+    /// buffer reusable for a narrower width, and it is also why a caller must not
+    /// rely on those bits: a value produced by an operation narrower than the
+    /// buffer slot is still read correctly, and one produced by hand is not.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ZeroWidth`] if `width == 0`, or [`Error::BufferLength`] if
+    /// `words.len()` is not exactly [`words_for_width`]`(width)`.
+    ///
+    /// ```
+    /// # use ferrite_lithic_bits::Bits;
+    /// let value = Bits::from_word_slice(8, &[0b1010_1010]).unwrap();
+    /// assert_eq!(value.to_u64().unwrap(), 0b1010_1010);
+    /// assert!(Bits::from_word_slice(8, &[0, 0]).is_err());
+    /// ```
+    pub fn from_word_slice(width: u32, words: &[u64]) -> Result<Self, Error> {
+        Self::checked_width(Op::Construct, width)?;
+        let expected = words_for_width(width);
+        if words.len() != expected {
+            return Err(Error::BufferLength {
+                op: Op::Construct,
+                expected,
+                got: words.len(),
+            });
+        }
+        // `from_words` is the only place the zero-upper-bits invariant may be
+        // established for a caller-supplied range.
+        Ok(Bits::from_words(width, words.to_vec()))
+    }
+
     /// The value as a `u64`.
     ///
     /// # Errors

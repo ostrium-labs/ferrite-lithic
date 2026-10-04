@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2ef352bd90f962f3830e3368bad3d7f1e4040b88e8ad96420aa3609714bd4970 # shrinks to width = 1
+cc 9d33537008b5e29e522753b05fc8ec51af4074322918f44d69c4b9f596aedd53 # shrinks to op_idx = 0, (width, a, b) = (2, Bits { 2, 1 }, Bits { 2, 0 })
+cc 2dfe6797b342bacc224f2c283cfa29deec15a3ec3292a1af022e8534e7e9a9a7 # shrinks to (width, offset, len, a) = (66, 47, 18, Bits { 66, 10000000000000000 })
+cc 89d356848e710f101a309ac7e4bbfa5fa2d19332c4366152d506405f5646ceeb # shrinks to op_idx = 11, (width, a, b) = (65, Bits { 65, 07500000000000000 }, Bits { 65, 174defaa649d4ff4a })
+cc b5f4bc27b00ccd59b6e3ef2945cde91fbc5dfc8ecb788ced67d7a4d14102b33a # shrinks to width = 1
+cc e43c9e3ea6a75c15676087d5a47cd87cca739238b3a6b2eada6c9430f2978abe # shrinks to op_idx = 15, (width, a, b) = (66, Bits { 66, 00000000000000000 }, Bits { 66, 12e14780100000000 })

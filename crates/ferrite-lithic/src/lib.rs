@@ -103,10 +103,3 @@ mod design;
 mod ops;
 
 pub use design::{Design, Error, Signal};
-
-/// The README's examples are compiled and run as doctests, so the front page
-/// cannot drift from the API. A crate needs a target for `include_str!` to hang
-/// the examples off, and an unused private struct is the cheapest one.
-#[cfg(doctest)]
-#[doc = include_str!("../../../README.md")]
-struct ReadmeExamples;

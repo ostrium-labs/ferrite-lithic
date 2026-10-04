@@ -206,6 +206,9 @@ struct Arena {
     /// by construction, so `check` has to be told which wires are ports rather
     /// than inferring it from a name or a width.
     inputs: RefCell<Vec<NodeId>>,
+    /// Wires driven from inside and presented as module outputs, in declaration
+    /// order. See [`Design::output`].
+    outputs: RefCell<Vec<NodeId>>,
     /// Identity, so a mixed-design error can name two designs rather than print
     /// addresses.
     tag: u64,
@@ -234,6 +237,7 @@ impl Design {
             arena: Rc::new(Arena {
                 circuit: RefCell::new(Circuit::new()),
                 inputs: RefCell::new(Vec::new()),
+                outputs: RefCell::new(Vec::new()),
                 tag,
             }),
         }
@@ -272,11 +276,34 @@ impl Design {
         Ok(())
     }
 
+    /// Whether `signal` is a node of *this* design.
+    ///
+    /// Backends need this, because a [`NodeId`](ferrite_lithic_ir::NodeId) on its
+    /// own is only meaningful within one arena: signal 3 of another design is not
+    /// signal 3 of this one, and a lookup that skipped this check would silently
+    /// read the wrong node. The operators get it for free from
+    /// [`PartialEq`]; a consumer holding only a node id does not.
+    #[must_use]
+    pub fn owns(&self, signal: &Signal) -> bool {
+        signal.belongs_to(&self.arena)
+    }
+
     /// The wires declared as input ports, in declaration order.
     #[must_use]
     pub fn input_ports(&self) -> Vec<Signal> {
         self.arena
             .inputs
+            .borrow()
+            .iter()
+            .map(|id| self.wrap(*id))
+            .collect()
+    }
+
+    /// The wires declared as output ports, in declaration order.
+    #[must_use]
+    pub fn output_ports(&self) -> Vec<Signal> {
+        self.arena
+            .outputs
             .borrow()
             .iter()
             .map(|id| self.wrap(*id))
@@ -384,11 +411,17 @@ impl Design {
     }
 
     /// An output port: a named wire driven by `driver`.
+    ///
+    /// Recorded in declaration order, symmetrically with [`Design::input`]. A
+    /// backend needs the port list to know what a cycle's result *is*: without
+    /// it a simulator can only dump every named node, and the answer to "what did
+    /// this module produce" becomes a guess about which names matter.
     pub fn output(&self, name: &str, width: u32, driver: &Signal) -> Result<Signal, Error> {
-        let id = self.wire(width)?;
-        self.drive(&id, driver)?;
-        self.set_name(&id, name)?;
-        Ok(id)
+        let id = self.arena.circuit.borrow_mut().wire(width)?;
+        self.drive(&self.push(id), driver)?;
+        self.arena.circuit.borrow_mut().set_name(id, name)?;
+        self.arena.outputs.borrow_mut().push(id);
+        Ok(self.push(id))
     }
 
     // ------------------------------------------------------------ drivers
@@ -778,6 +811,26 @@ impl Design {
     /// The register's output *is* the returned signal: it stores no output value
     /// of its own, which is what makes "is this stateful?" a constructor match.
     /// `reset` and `clear` must be one bit.
+    /// A register. Its output is the returned signal; `data` is its input.
+    ///
+    /// Both control inputs are one bit wide and both act *synchronously*, at the
+    /// edge:
+    ///
+    /// | clock | reset | clear | effect |
+    /// |---|---|---|---|
+    /// | 0 | – | – | holds |
+    /// | 1 | 1 | – | becomes zero |
+    /// | 1 | 0 | 1 | holds |
+    /// | 1 | 0 | 0 | becomes `data` |
+    ///
+    /// **`clear` gates the update and `reset` overrides it.** That ordering is the
+    /// one worth stating out loud, because the two are easy to swap and a swapped
+    /// pair produces a register that never updates — which looks exactly like a
+    /// simulator that is not advancing. To *hold* a register, assert `clear`; to
+    /// *reset* it, assert `reset`.
+    ///
+    /// Registers start at zero; a non-zero starting value is a simulation-time
+    /// choice rather than part of the circuit.
     pub fn reg(
         &self,
         data: &Signal,
