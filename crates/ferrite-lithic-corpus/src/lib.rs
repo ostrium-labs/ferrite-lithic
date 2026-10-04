@@ -45,14 +45,25 @@
 //! would have to be threaded through that loop as a type parameter.
 
 pub mod aes;
+pub mod aho_corasick;
 pub mod base64;
+pub mod bitpack;
 pub mod chacha20;
 pub mod crc3;
 pub mod crc32;
+pub mod deflate;
+pub mod dfa;
+pub mod fse;
 pub mod ghash;
+pub mod hamming;
 pub mod hex;
 pub mod lfsr;
+pub mod memchr;
+pub mod packet;
+pub mod rle;
+pub mod roaring;
 pub mod sha256;
+pub mod sorting;
 
 use std::fmt;
 
