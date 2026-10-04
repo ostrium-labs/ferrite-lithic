@@ -65,9 +65,43 @@ fn writing_out_of_order_fills_the_gap_rather_than_moving_values() {
     wave.set(2, &acc, &Bits::constant(3, 4).unwrap()).unwrap();
 
     assert_eq!(wave.cycles(), 5);
-    assert_eq!(wave.value(0, &acc).unwrap().to_u64().unwrap(), 0);
     assert_eq!(wave.value(2, &acc).unwrap().to_u64().unwrap(), 3);
     assert_eq!(wave.value(4, &acc).unwrap().to_u64().unwrap(), 9);
+    // Out of order does not move values: cycle 4 still holds what was written to
+    // cycle 4, and the recording started at cycle 2 even though 4 was written
+    // first.
+    assert_eq!(
+        wave.value(0, &acc),
+        None,
+        "cycle 0 is before the first recorded cycle, so it is absent rather than zero"
+    );
+    assert_eq!(
+        wave.value(1, &acc),
+        None,
+        "and so is cycle 1, which nobody wrote"
+    );
+    // The series starts where the recording started, not at index zero.
+    let series = wave.series(&acc).unwrap();
+    assert_eq!(series.len(), 3, "cycles 2, 3 and 4");
+    assert_eq!(series[0].to_u64().unwrap(), 3, "cycle 2");
+    assert_eq!(series[2].to_u64().unwrap(), 9, "cycle 4");
+}
+
+#[test]
+fn a_cycle_before_the_first_record_is_absent_and_not_zero() {
+    // The simulator numbers its first edge cycle 1, so a waveform driven by one
+    // starts at 1. Reporting cycle 0 as a zero row would put a plausible-looking
+    // value in front of every series, which is how an off-by-one in a test becomes
+    // an off-by-one that still passes.
+    let mut wave = WaveData::new("top");
+    let acc = wave.register("acc", 4).unwrap();
+    for cycle in 1..=3u64 {
+        wave.set(cycle, &acc, &Bits::constant(cycle, 4).unwrap())
+            .unwrap();
+    }
+    assert_eq!(wave.value(0, &acc), None);
+    assert_eq!(wave.value(1, &acc).unwrap().to_u64().unwrap(), 1);
+    assert_eq!(wave.series(&acc).unwrap().len(), 3);
 }
 
 #[test]

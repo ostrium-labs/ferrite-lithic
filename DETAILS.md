@@ -48,7 +48,8 @@ written to be extended if code or vectors are ever derived rather than rewritten
 | `ferrite-lithic-derive` | `#[derive(PortList)]`: a module interface's names and widths | A2 **done** |
 | `ferrite-lithic-wave` | Cycle-indexed values and a VCD rendering of them | A2 **done** |
 | `ferrite-lithic-cosim` | Verilator equivalence against `ferrite-lithic-sim` | A2 **done** |
-| `ferrite-lithic-tb` | Coroutine-style step testbenches | A3 |
+| `ferrite-lithic-tb` | Step testbenches where every `.await` is one clock edge | A3 **done** |
+| `ferrite-lithic-corpus` | Verified designs that check the toolchain, one per algorithm | — |
 
 ### What `ferrite-lithic-bits` actually does
 
@@ -809,14 +810,103 @@ Memory ports needed the same care: a memory's data width is fixed at constructio
 the write port's data is explicitly extended or truncated rather than hoped for, and
 the read port's width is whatever the memory says rather than what the pool held.
 
+### What A3 settled
+
+`ferrite-lithic-tb` is done, and the decision worth recording is what a step
+*is*. ADR-0019 has the argument; the short version is that **advancing a cycle is
+work, not a yield**, so the futures this crate provides do their work on the first
+poll and complete. That makes `Testbench::run` a single poll rather than an executor:
+no nightly `generators`, no `async-trait`, no boxed allocation per step, no second
+thread, and `Waker::noop()` is honest because a wake is not a thing that can happen.
+
+The cost is that `run` refuses a future that returns `Pending` rather than spinning
+on it, and that a step cannot return `Result` — every `.await` would need a `?` and
+the plumbing would come straight back. A failure is recorded and reported when the
+body completes, which also makes a body that failed and *then* returned a value a
+failed run rather than a passing one. Both are the right trade for a testbench, and
+both are checked rather than assumed.
+
+### What the corpus settled, and what it cost
+
+`ferrite-lithic-corpus` exists to attack the tools from the other side. A tool gets
+tested with inputs chosen by whoever wrote it, so its tests drift toward what the
+tool was built to do; a design written the way hardware would want it is the
+opposite direction. `crc3` — CRC-3/ROTD as a three-bit LFSR, one byte per cycle — is
+the first entry, and the argument for having it at all is what it found.
+
+**Four defects, all of them the same shape.** None is a subtle numerical bug; every
+one is a test asserting the property that was easy rather than the one that mattered.
+
+- `Design::sll` and `Design::srl` were **exactly swapped** for the whole of A1 and
+  A2, and `sra` with them. `srl` built `{slice, zeros}`, which is a *left* shift of
+  precisely the right width — so `tests/builder.rs`, which checks that a shift has
+  the width a shift should have, could not see it. Nothing in the workspace ever
+  checked the *value* of a shift.
+- The `cat` property in `tests/ops.rs` set its low half to **zeros**. That cannot
+  distinguish "shifted into place" from "left where it was", because shifting zero
+  moves nothing — so the one property covering the operation that every
+  width-changing op is built from could not fail. The replacement puts a nonzero
+  value in both halves.
+- `WaveData::record` padded skipped cycles with zeros, which flatly contradicts
+  `value`'s documented promise that an unrecorded cycle "reads as absent rather than
+  as zero". Since the simulator numbers its first edge cycle 1, *every* series taken
+  from a simulator began with a fabricated zero row — and `series_named` read the
+  column directly, so fixing `series` alone would not have caught it.
+- The emitter's reserved-word list was missing `byte`, along with `break`, `chandle`,
+  `throw` and `assume`. A port called `byte` emitted `input wire [7:0] byte`, which
+  is a syntax error in every tool that matters, and nothing noticed because nothing
+  had ever been named `byte`.
+
+The Verilator path is no longer written-but-unrun, and that is what turned the last
+two of those from theory into fact. `verilator` is installed now, so
+`tests/equivalence.rs` runs for real and the emitted Verilog for every corpus design
+is compiled, executed, and compared against `ferrite-lithic-sim` cycle by cycle. The
+generated C++ had **never been compiled** before, and it was wrong in three ways at
+once: the `mask<W>` template was emitted *after* `main` (a C++ declaration-order
+error), every use of it was missing its call parentheses (`& mask<8>` rather than
+`& mask<8>()`, so the "checked as text" test was checking text nobody had compiled),
+and the cycle loop was `while (ports == 0 || fscanf(...) == 1)`, which is an
+**infinite loop** rather than a solution for a module with no input ports. All three
+were found by the first real run.
+
+Two more, both from the same run. `--x-initial zero` is not a value Verilator
+accepts (`0` is), and Verilator's *default* is `unique`, which randomises the
+initial state per run to shake out designs that depend on uninitialised state — the
+right default for Verilator's own tests and the wrong one here, since `Sim`
+zero-fills and a design relying on reset state would then diverge at random rather
+than every time. And the clock was listed as a stimulus column as well as a port, so
+the driver applied the clock from the stimulus file and then raised it again: a
+stimulus word of 1 there meant no edge happened, no register updated, and every
+output was constant — which two backends agree on perfectly well. `Plan::new` now
+refuses that shape at construction.
+
+The last of the cosim fixes is the one that would have bitten every future design.
+`Plan` used one name for two things: the name the *design* knows a port by, which is
+what `Sim` takes, and the name the *emitted Verilog* declares it under, which is
+what the driver assigns. Those are usually the same string and sometimes not, because
+the emitter escapes keywords. The error that comes out of getting it wrong is a C++
+compile error about a member the Verilator class does not have, which names the
+emitter rather than the plan. `Port` now carries both names, and `Plan::of` gets the
+emitted ones from the emitter itself rather than recomputing them — because two ports
+whose names both legalise to `a_b` come out as `a_b` and `a_b_1`, and no function of
+a single name can predict that suffix.
+
 ### What is still not covered
 
-The Verilator path is **written but not run here**: `verilator` is not installed on
-the machine this was built on, so `tests/equivalence.rs` prints its skip and the
-generated C++ has never been compiled. The driver is checked as *text* — its phase
-order, its masks, its refusal of a wide port — which is most of what can go wrong
-without a compiler, but "checked as text" is not "compiles". Installing `verilator` and
-running the suite is the next thing to do.
+Every algorithm beyond CRC-3 is not written. The corpus has one entry, chosen
+because it is the smallest design that is genuinely streaming, and the ladder from
+there — `crc32fast`, `sha2`, `aes`, `chacha20`, `ghash`, `blake3`, then `memchr` and
+`aho-corasick` and a regex DFA as a ROM plus a state register, then the
+data-infrastructure kernels — is the next thing.
 
-`ferrite-lithic-tb` (A3) is not started. Nothing in A2 depends on it, and the
-assertions it would replace are currently written directly against `WaveData`.
+The corpus is also the first thing in this project that has needed the golden model
+to be a *different crate*. `crc3fast` is not in the registry index, so the golden
+model is the `crc` crate's CRC-3/ROTD, transcribed from the RevEng catalogue into
+the `crc` crate's own `Algorithm` type. The transcription is checked against the
+catalogue's published check value before any of it is trusted, because a
+hand-transcribed parameter set that is wrong agrees with a wrong design perfectly.
+
+What this says about the toolchain is not flattering: 471 tests across eight crates,
+and a design with 60 lines of shift and XOR found four bugs in a row. The tests were
+not bad, they were aimed at the wrong things. `sll` and `srl` were swapped for the
+entire life of the project and every crate agreed with every other crate about it.

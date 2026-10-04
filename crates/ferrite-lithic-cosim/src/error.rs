@@ -48,6 +48,11 @@ pub enum Error {
         /// Every declared input name.
         known: Vec<String>,
     },
+    /// The clock also appears in the stimulus's input columns.
+    ClockIsAStimulusColumn {
+        /// The clock's name.
+        clock: String,
+    },
     /// A process failed.
     Process {
         /// What was run, for the message.
@@ -105,6 +110,16 @@ impl fmt::Display for Error {
                 } else {
                     known.join(", ")
                 }
+            ),
+            Self::ClockIsAStimulusColumn { clock } => write!(
+                f,
+                "the clock `{clock}` is also a stimulus column. Both backends drive \
+                 the clock themselves, so a stimulus word for it either is ignored \
+                 (simulator) or overwrites the clock between the low and high \
+                 phases (generated driver), and in the second case a word of 1 \
+                 means the driver raises a clock that is already high, so no edge \
+                 happens and no register updates. The clock is a port; it is not an \
+                 input value."
             ),
             Self::NoVerilator => write!(
                 f,

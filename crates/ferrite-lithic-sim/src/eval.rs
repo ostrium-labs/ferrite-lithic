@@ -483,7 +483,14 @@ impl Machine {
             } => {
                 let width = high_width + low_width;
                 if words_for_width(width) == 1 {
-                    let value = (self.buffer[high] << low_width) | self.buffer[low];
+                    // `high` moves up by the width of `low`; `low` does not move,
+                    // because `concat` puts its first argument on top and the second
+                    // already occupies the bottom bits. Both halves are masked to
+                    // their declared widths first, so a neighbouring node's high
+                    // bits cannot ride along in the shift.
+                    let high_value = self.buffer[high] & mask_for_width(high_width);
+                    let low_value = self.buffer[low] & mask_for_width(low_width);
+                    let value = (high_value.wrapping_shl(low_width)) | low_value;
                     self.write_word(dst, value, width);
                 } else {
                     let parts = [self.read(high, high_width), self.read(low, low_width)];

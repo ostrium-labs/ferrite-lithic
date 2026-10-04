@@ -72,6 +72,20 @@ use crate::naming::{NameMap, legalise};
 /// Two spaces per level.
 const INDENT: &str = "  ";
 
+/// The identifiers [`emit_module`] will write for `module`'s ports.
+pub(crate) fn port_identifiers(module: &Module) -> Result<Vec<String>, Error> {
+    let reachable = reachable_nodes(module)?;
+    let names = NameMap::build(module, &reachable)?;
+    let identifiers = |ids: &[ferrite_lithic_ir::NodeId]| {
+        ids.iter()
+            .map(|id| names.name(*id).to_string())
+            .collect::<Vec<_>>()
+    };
+    let mut out = identifiers(module.inputs());
+    out.extend(identifiers(module.outputs()));
+    Ok(out)
+}
+
 /// Emit `module`, and nothing else.
 pub(crate) fn emit_module(module: &Module) -> Result<String, Error> {
     if module.name().is_empty() {

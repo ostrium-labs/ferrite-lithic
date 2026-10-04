@@ -104,6 +104,16 @@ pub struct WaveData {
     /// type exists for — "what was `acc` in cycle 7", "when did it change" — are
     /// all about one signal over time.
     values: Vec<Vec<Bits>>,
+    /// The first cycle ever recorded, or [`None`] before anything is.
+    ///
+    /// Every port is written by the same [`record`](WaveData::record) call, so they
+    /// share one first cycle. It exists because the columns are stored densely —
+    /// `values[port][cycle]` — and writing cycle 7 first has to leave room for 0
+    /// through 6. Filling that room with zeros would say "the value at cycle 3 was
+    /// zero" about a cycle nobody recorded, which is the one thing this type is
+    /// supposed to make impossible: a missing value has to look missing, or a test
+    /// asserting on it passes for the wrong reason.
+    first_cycle: Option<u64>,
 }
 
 impl WaveData {
@@ -118,6 +128,7 @@ impl WaveData {
             top: top.into(),
             ports: Vec::new(),
             values: Vec::new(),
+            first_cycle: None,
         }
     }
 
@@ -230,6 +241,7 @@ impl WaveData {
             });
         }
         let width = port.width;
+        self.note_cycle(cycle);
         let column = &mut self.values[index];
         let zero = Bits::zeros(width).expect("a declared width is never zero");
         while column.len() <= cycle as usize {
@@ -237,6 +249,19 @@ impl WaveData {
         }
         column[cycle as usize] = value.clone();
         Ok(())
+    }
+
+    /// Lowers the first recorded cycle, if this one is earlier.
+    ///
+    /// Both writers go through this, so a waveform filled by `set` and one filled by
+    /// `record` agree about where they start. Only ever moves down: recording cycle
+    /// 4 and then cycle 2 means the first sample is cycle 2, not cycle 4.
+    fn note_cycle(&mut self, cycle: u64) {
+        match self.first_cycle {
+            None => self.first_cycle = Some(cycle),
+            Some(first) if cycle < first => self.first_cycle = Some(cycle),
+            Some(_) => {}
+        }
     }
 
     /// Fills every port for one cycle from a lookup by name.
@@ -268,6 +293,7 @@ impl WaveData {
             }
             values.push(value);
         }
+        self.note_cycle(cycle);
         for (index, value) in values.into_iter().enumerate() {
             let width = self.ports[index].width;
             let column = &mut self.values[index];
@@ -286,17 +312,32 @@ impl WaveData {
     /// absent rather than as zero, because "nothing was written here" and "zero
     /// was written here" are different facts and a test should be able to tell
     /// them apart.
+    ///
+    /// Every cycle *before* the first [`record`](WaveData::record) is absent, which
+    /// is what keeps that promise true for a waveform whose first sample is not
+    /// cycle zero — the simulator numbers its first edge cycle 1.
+    ///
+    /// A *gap* between recorded cycles is the one thing that still reads as zero,
+    /// because the columns are stored densely and closing a hole needs a value.
+    /// Recording every cycle in between is the caller's job; [`record`](WaveData::record)
+    /// from a step at a time never leaves a gap, which is the only way this crate
+    /// fills one in practice.
     #[must_use]
     pub fn value(&self, cycle: u64, port: &Port) -> Option<&Bits> {
+        let first = self.first_cycle?;
+        if cycle < first {
+            return None;
+        }
         let index = self.index_of(port).ok()?;
         self.values.get(index)?.get(cycle as usize)
     }
 
-    /// One signal's values, over the cycles recorded so far.
+    /// One signal's values, from the first recorded cycle onwards.
     #[must_use]
     pub fn series(&self, port: &Port) -> Option<&[Bits]> {
+        let first = self.first_cycle? as usize;
         let index = self.index_of(port).ok()?;
-        Some(self.values.get(index)?.as_slice())
+        self.values.get(index)?.get(first..)
     }
 
     /// One signal's values, over the cycles recorded so far, by name.
@@ -305,11 +346,13 @@ impl WaveData {
     ///
     /// [`Error::UnknownPortName`] if no such signal is declared.
     pub fn series_named(&self, name: &str) -> Result<Vec<Bits>, Error> {
-        Ok(self
-            .values
-            .get(self.index_of_name(name)?)
-            .cloned()
-            .unwrap_or_default())
+        // Through `series`, not straight off `values`: the column is stored densely
+        // and `series` is what drops the cycles before the first recording. Reading
+        // the column here returned one leading row too many for every waveform whose
+        // first sample was not cycle zero -- which is every waveform a simulator
+        // produces, since its first edge is cycle 1.
+        let index = self.index_of_name(name)?;
+        Ok(self.values[index][self.first_cycle.unwrap_or(0) as usize..].to_vec())
     }
 
     /// One signal's value changes: `(cycle, value)` for each cycle it differs
@@ -325,9 +368,13 @@ impl WaveData {
             return changes;
         };
         let mut previous: Option<&Bits> = None;
-        for (cycle, value) in column.iter().enumerate() {
+        // The series starts at the first recorded cycle, so the index has to be
+        // offset by it: reporting cycle 0 for something that happened at cycle 1
+        // is the same class of mistake as reporting an unrecorded cycle as zero.
+        let first = self.first_cycle.unwrap_or(0);
+        for (index, value) in column.iter().enumerate() {
             if previous != Some(value) {
-                changes.push((cycle as u64, value.clone()));
+                changes.push((first + index as u64, value.clone()));
                 previous = Some(value);
             }
         }
@@ -343,11 +390,13 @@ impl WaveData {
     /// a waveform that ran too long is a failure and not a pass on the prefix.
     pub fn assert_series(&self, port: &Port, expected: &[Bits]) -> Result<(), Mismatch> {
         let observed = self.series(port).unwrap_or_default();
-        for (cycle, want) in expected.iter().enumerate() {
-            let Some(got) = observed.get(cycle) else {
+        let first = self.first_cycle.unwrap_or(0);
+        for (index, want) in expected.iter().enumerate() {
+            let cycle = first + index as u64;
+            let Some(got) = observed.get(index) else {
                 return Err(Mismatch {
                     port: port.name.clone(),
-                    cycle: cycle as u64,
+                    cycle,
                     expected: want.clone(),
                     got: None,
                 });
@@ -355,7 +404,7 @@ impl WaveData {
             if got != want {
                 return Err(Mismatch {
                     port: port.name.clone(),
-                    cycle: cycle as u64,
+                    cycle,
                     expected: want.clone(),
                     got: Some(got.clone()),
                 });
@@ -364,7 +413,7 @@ impl WaveData {
         if observed.len() != expected.len() {
             return Err(Mismatch {
                 port: port.name.clone(),
-                cycle: expected.len() as u64,
+                cycle: first + expected.len() as u64,
                 expected: Bits::zeros(port.width).expect("a declared width is never zero"),
                 got: observed.get(expected.len()).cloned(),
             });

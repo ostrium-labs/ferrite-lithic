@@ -9,15 +9,22 @@ transpiler from another language: a Rust library you call from Rust.
 Status
 ------
 
-**Phase A2, in progress.** Every A1 crate is implemented and tested, and so are
-A2's three: `ferrite-lithic-derive` (port-list shapes), `ferrite-lithic-wave`
-(cycle-indexed values and VCD) and `ferrite-lithic-cosim` (Verilator
-equivalence). `ferrite-lithic-tb` is the remaining crate.
+**Phases A1 through A3 are implemented and tested.** That is every crate in the
+layout table below, plus `ferrite-lithic-corpus` — a set of verified designs
+written the way hardware would want them, which exist to check the *toolchain*
+rather than to exercise a feature.
 
-Two gates depend on tools that are looked for rather than required, and both
-**print what they skipped**: `iverilog` for the A1 syntax gate and `verilator`
-for the A2 equivalence check. Install them and those tests run; leave them out and
-the rest of the suite is unchanged.
+Verilator and Icarus are looked for rather than required, and both **print what
+they skipped**: `iverilog` for the syntax gate and `verilator` for equivalence
+checking. Install them and those tests run; leave them out and the rest of the
+suite is unchanged. With Verilator installed, the emitted Verilog for every corpus
+design is compiled, run, and compared against `ferrite-lithic-sim` cycle by cycle.
+
+The corpus paid for itself immediately. `crc3` — a three-bit LFSR, one byte per
+cycle, the smallest design with a register and a bit stream — found four defects
+that 471 tests of the tools had not, including `Design::sll` and `Design::srl`
+being *exactly swapped* for the whole of A1 and A2. See
+`docs/adr/0019-step-testbenches-where-await-is-a-clock-edge.md`.
 
 The design notes that settle the simulator's execution model, the Verilog
 emitter's contract and the port-list rule are in `docs/design-notes.md`, and
@@ -63,16 +70,17 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 |---|---|---|
 | `add`, `sub`, `neg` | the left operand's | truncation is explicit, never silent-by-accident |
 | `mul` | `wa + wb`, cannot overflow | the dangerous operation should not be the truncating one |
-| `sll`, `srl`, `sra` | unchanged | structural: `select` + `cat` + a constant, no shift primitive |
+| `sll`, `srl`, `sra` | unchanged | structural: `select` + `cat` + a constant, no shift primitive. **`sll` and `srl` were swapped until the corpus caught it** |
 | `udiv`, `sdiv`, `urem`, `srem` | the left operand's | absent from Hardcaml entirely; infer large dividers |
 
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-471 tests across the eight crates: 96 in `ferrite-lithic-bits`, 116 in
-`ferrite-lithic-ir`, 55 in the front end, 48 in the simulator, 49 in the Verilog
-emitter, 39 in `ferrite-lithic-derive`, 41 in `ferrite-lithic-wave` and 27 in
-`ferrite-lithic-cosim`. The bits crate
+507 tests across the ten crates: 96 in `ferrite-lithic-bits`, 116 in
+`ferrite-lithic-ir`, 55 in the front end, 51 in the simulator, 50 in the Verilog
+emitter, 39 in `ferrite-lithic-derive`, 42 in `ferrite-lithic-wave`, 31 in
+`ferrite-lithic-cosim`, 16 in `ferrite-lithic-tb` and 11 in
+`ferrite-lithic-corpus`. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
@@ -331,6 +339,55 @@ No `$date` in the file, and positional identifiers rather than names derived fro
 signals: two runs of one design produce the same bytes, and two ports whose names
 legalise alike can both be dumped.
 
+### `ferrite-lithic-tb`
+
+A test is an `async` block where every `.await` is one rising edge:
+
+```rust,ignore
+let tb = Testbench::new(&design)?;
+tb.run(|tb| async move {
+    tb.pulse("rst").await;
+    tb.drive("d", 5).await;
+    assert_eq!(tb.value("q"), 5);
+    tb.drive("d", 0).await;
+    assert_eq!(tb.value("q"), 5, "the accumulator holds");
+})?;
+```
+
+The cycle count is the number of `.await`s, which is the point: a test that has to
+count `step()` calls to know where it is has already lost the thing it was meant to
+express.
+
+These futures do not suspend, and that is a feature rather than a limitation —
+**advancing a cycle is work, not a yield**, so a step does its work on the first
+poll and completes. No nightly `generators`, no `async-trait`, no per-step
+allocation, no second thread. `Testbench::run` polls once and *refuses* a future
+that returns `Pending` rather than spinning, because a foreign future waiting for a
+wake is waiting for something a testbench will never do, and a suite that never
+returns cannot report anything.
+
+A step cannot return `Result` — every `.await` would need a `?` and the plumbing
+would come straight back — so a failure is recorded and reported when the body
+completes. That also makes a body which failed and *then* returned a value a failed
+run rather than a passing one.
+
+### `ferrite-lithic-corpus`
+
+Every other crate is a tool, and a tool gets tested with inputs chosen by whoever
+wrote it, so its tests drift toward what the tool was built to do. A corpus entry
+is a real algorithm written the way hardware would want it, checked three ways:
+against the **original crate** as the golden model (never a second implementation
+by the same hand), through the **step testbench**, and against **Verilator** by
+compiling and running the emitted Verilog and comparing outputs cycle by cycle.
+
+`crc3` is the first entry: CRC-3/ROTD, a three-bit LFSR consuming one byte per
+cycle. It is the smallest design with a register and a bit stream, and the tap is
+`0b110`, not the polynomial `0b011` — the *reflected* form, because a right-shifting
+register puts the new input bit where it is already connected. The wrong tap is
+still a three-bit LFSR and still produces three bits; it just computes a different
+CRC. Both were checked against the `crc` crate over random input: `0b110` agrees
+everywhere, `0b011` disagrees on 263 of them.
+
 ### `ferrite-lithic-cosim`
 
 The emitted Verilog, checked against the simulator, cycle by cycle.
@@ -342,8 +399,8 @@ use ferrite_lithic_cosim::{Plan, Port, Stimulus, compare};
 let plan = Plan {
     top: "passthrough".to_string(),
     clock: Some("clk".to_string()),
-    inputs: vec![Port { name: "d".to_string(), width: 8 }],
-    outputs: vec![Port { name: "q".to_string(), width: 8 }],
+    inputs: vec![Port::new("d", 8)],
+    outputs: vec![Port::new("q", 8)],
 };
 
 let mut stimulus = Stimulus::new();
@@ -454,7 +511,8 @@ Crate layout
 | `ferrite-lithic-derive` | `#[derive(PortList)]`: a module interface's names and widths from a struct | A2 **done** |
 | `ferrite-lithic-wave` | Cycle-indexed values, asserted on directly, plus a VCD rendering | A2 **done** |
 | `ferrite-lithic-cosim` | Verilator equivalence checking against `ferrite-lithic-sim` | A2 **done** |
-| `ferrite-lithic-tb` | Coroutine/async-style step testbenches | A3 |
+| `ferrite-lithic-tb` | Coroutine/async-style step testbenches, where every `.await` is one clock edge | A3 **done** |
+| `ferrite-lithic-corpus` | Verified designs that check the toolchain against the original crate for each algorithm | — |
 
 Design decisions
 ----------------
@@ -465,8 +523,8 @@ Design decisions
 2. **Embedded DSL, not a new language.** The Hardcaml model. The
    new-language route is already covered by Spade and others.
 3. **Own IR first.** Emitting FIRRTL or CIRCT could reuse their optimisers and
-   Verilog backends but adds a heavy dependency. Revisit at the end of Phase A2
-   with real designs in hand.
+   Verilog backends but adds a heavy dependency. Revisit once the corpus has enough
+   designs to say what an optimiser could actually do.
 4. **Port the design, write tests from behaviour.** Hardcaml is MIT (Jane
    Street), so this is permitted and attributed in `NOTICE`. We take the
    architecture and the semantics, not the code.

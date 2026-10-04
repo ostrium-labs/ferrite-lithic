@@ -34,8 +34,8 @@
 //! let plan = Plan {
 //!     top: "passthrough".to_string(),
 //!     clock: Some("clk".to_string()),
-//!     inputs: vec![Port { name: "d".to_string(), width: 8 }],
-//!     outputs: vec![Port { name: "q".to_string(), width: 8 }],
+//!     inputs: vec![Port::new("d", 8)],
+//!     outputs: vec![Port::new("q", 8)],
 //! };
 //! let mut stimulus = Stimulus::new();
 //! stimulus.push(vec![ferrite_lithic_bits::Bits::constant(0xa5, 8).unwrap()]).unwrap();

@@ -719,6 +719,9 @@ impl Design {
     /// Shifting by at least the width yields all zeros. A shift of zero is the
     /// whole value and builds no filler, since there is no zero-width `cat` part
     /// to build and a zero-width value does not exist.
+    ///
+    /// The moved bits end up in the *high* positions, so the surviving low bits are
+    /// `concat`'s first argument and the zero fill is its second.
     pub fn sll(&self, value: &Signal, by: u32) -> Result<Signal, Error> {
         self.same_design(&[value])?;
         if by == 0 {
@@ -727,12 +730,15 @@ impl Design {
         if by >= value.width {
             return self.zeros(value.width);
         }
-        let low = self.slice(value, 0, value.width - by)?;
-        let high = self.zeros(by)?;
+        let high = self.slice(value, 0, value.width - by)?;
+        let low = self.zeros(by)?;
         self.concat(&[high, low])
     }
 
     /// Shift right by a constant amount, filling with zeros. Structural.
+    ///
+    /// The moved bits end up in the *low* positions, so the zero fill is `concat`'s
+    /// first argument and the surviving high bits are its second.
     pub fn srl(&self, value: &Signal, by: u32) -> Result<Signal, Error> {
         self.same_design(&[value])?;
         if by == 0 {
@@ -741,8 +747,8 @@ impl Design {
         if by >= value.width {
             return self.zeros(value.width);
         }
-        let high = self.slice(value, by, value.width - by)?;
-        let low = self.zeros(by)?;
+        let high = self.zeros(by)?;
+        let low = self.slice(value, by, value.width - by)?;
         self.concat(&[high, low])
     }
 
@@ -758,9 +764,9 @@ impl Design {
             let msb = self.slice(value, value.width - 1, 1)?;
             return self.replicate(&msb, value.width);
         }
-        let high = self.slice(value, by, value.width - by)?;
         let msb = self.slice(value, value.width - 1, 1)?;
-        let low = self.replicate(&msb, by)?;
+        let high = self.replicate(&msb, by)?;
+        let low = self.slice(value, by, value.width - by)?;
         self.concat(&[high, low])
     }
 

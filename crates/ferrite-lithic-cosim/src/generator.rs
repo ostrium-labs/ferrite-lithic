@@ -257,10 +257,13 @@ pub fn build(seed: u64, options: &Options) -> Result<Generated, Error> {
 
     let mut stimulus = Stimulus::new();
     for _ in 0..8 {
-        // `clk`, `rst`, `clr`, then one value per data input, which is the
-        // generator's own port order: the three control inputs are declared
-        // first and the data inputs after them.
-        let mut row = vec![rng.value(1), rng.value(1), rng.value(1)];
+        // `rst`, `clr`, then one value per data input, which is the generator's
+        // own port order: the controls are declared first and the data inputs
+        // after them. `clk` is deliberately *not* here — `Plan::of` excludes the
+        // clock from the stimulus columns, because both backends drive it
+        // themselves and a column for it is a word the generated driver applies
+        // and then overwrites the clock with.
+        let mut row = vec![rng.value(1), rng.value(1)];
         row.extend((0..options.inputs).map(|_| rng.value(width)));
         stimulus.push(row)?;
     }

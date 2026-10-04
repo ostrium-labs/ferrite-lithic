@@ -52,22 +52,23 @@ fn accumulator() -> (Design, Plan) {
     design.drive(&state, &held).unwrap();
     ferrite_lithic::outputs::<AccOutputs>(&design, &AccOutputs { q: held }).unwrap();
 
-    let plan = Plan {
-        top: "accumulator".to_string(),
-        clock: Some("clk".to_string()),
-        inputs: ["clk", "rst", "clr", "d"]
+    // `Plan::new` rather than a struct literal, and the clock is deliberately
+    // absent from `inputs`: it is a port, but both backends drive it themselves.
+    // This test could not tell the difference before Verilator was installed --
+    // the driver applied `clk` from the stimulus and then raised it again, so a
+    // stimulus word of 1 meant no edge at all and no register ever updated. Both
+    // backends then "agreed" on a design that never ran.
+    let plan = Plan::new(
+        "accumulator",
+        Some("clk".to_string()),
+        ["rst", "clr", "d"]
             .into_iter()
-            .zip([1u32, 1, 1, 8])
-            .map(|(name, width)| Port {
-                name: name.to_string(),
-                width,
-            })
+            .zip([1u32, 1, 8])
+            .map(|(name, width)| Port::new(name, width))
             .collect(),
-        outputs: vec![Port {
-            name: "q".to_string(),
-            width: 8,
-        }],
-    };
+        vec![Port::new("q", 8)],
+    )
+    .unwrap();
     (design, plan)
 }
 
@@ -77,8 +78,9 @@ fn accumulator_stimulus() -> Stimulus {
     for cycle in 0..16u64 {
         stimulus
             .push(vec![
-                Bits::constant(cycle % 2, 1).unwrap(),
-                // Reset on cycles 5 and 11, clear on 3 and 13.
+                // `rst`: high on cycles 5 and 11. `clr`: high on 3 and 13.
+                // Both gates are exercised so a cosimulation that only ever
+                // clocks registers forward cannot pass.
                 Bits::constant(u64::from(cycle == 5 || cycle == 11), 1).unwrap(),
                 Bits::constant(u64::from(cycle == 3 || cycle == 13), 1).unwrap(),
                 Bits::constant(cycle * 7, 8).unwrap(),
@@ -128,7 +130,7 @@ fn random_designs_agree_between_the_two_backends() {
     for seed in 0..3u64 {
         let options = generator::Options::default();
         let generated = generator::build(0x3ead_beef + seed, &options).unwrap();
-        let plan = Plan::of(&generated.design, &module_for(&generated.design, "random"));
+        let plan = Plan::of(&generated.design, &module_for(&generated.design, "random")).unwrap();
         let verilog = ferrite_lithic_cosim::emit(&generated.design, &plan).unwrap();
         let harness = Harness::build(&plan, &verilog, &plan.work_dir()).unwrap();
         let report =

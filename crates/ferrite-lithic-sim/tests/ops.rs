@@ -481,3 +481,120 @@ proptest! {
         prop_assert_eq!(&sim.peek("out").unwrap(), &a, "width {}", width);
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+    /// The width-changing operations, against the arithmetic they are named for.
+    ///
+    /// These are the operations the front end builds out of `slice` and `cat`
+    /// rather than computing directly, so a wrong argument order produces a
+    /// *shift*, of the right width, of the wrong direction -- and a width check
+    /// cannot see it. `sll` and `srl` were in fact exactly swapped for the whole of
+    /// A1 and A2, and nothing caught it: the builder tests checked the width a shift
+    /// produced, and the `cat` property checked a concatenation whose low half was
+    /// zero, which hides the question of which half moves.
+    ///
+    /// So each of these checks the *value*, over the full width sweep, against an
+    /// independent reference: `Bits`' own shifts and extensions.
+    #[test]
+    fn shifts_and_extensions_match_the_bits_crate(
+        (width, value) in single(),
+        by in 0u32..=8,
+    ) {
+        let by = by % (width + 1);
+        let d = Design::new();
+        let arg = d.input("a", width).unwrap();
+        let sll = d.sll(&arg, by).unwrap();
+        let srl = d.srl(&arg, by).unwrap();
+        let sra = d.sra(&arg, by).unwrap();
+        let zx = d.zero_extend(&arg, width + 3).unwrap();
+        let sx = d.sign_extend(&arg, width + 3).unwrap();
+        let tr = d.truncate(&arg, (width / 2).max(1)).unwrap();
+        for (name, signal) in [
+            ("sll", sll),
+            ("srl", srl),
+            ("sra", sra),
+            ("zx", zx),
+            ("sx", sx),
+            ("tr", tr),
+        ] {
+            d.output(name, signal.width(), &signal).unwrap();
+        }
+        let mut sim = Sim::new(&d).unwrap();
+        sim.set_input("a", value.clone()).unwrap();
+        sim.comb().unwrap();
+
+        let want_sll = value.sll(by).unwrap();
+        let want_srl = value.srl(by).unwrap();
+        let want_sra = value.sra(by).unwrap();
+        let want_zx = value.zero_extend(width + 3).unwrap();
+        let want_sx = value.sign_extend(width + 3).unwrap();
+        let want_tr = value.truncate((width / 2).max(1)).unwrap();
+
+        prop_assert_eq!(&sim.peek("sll").unwrap(), &want_sll, "sll by {} at width {}", by, width);
+        prop_assert_eq!(&sim.peek("srl").unwrap(), &want_srl, "srl by {} at width {}", by, width);
+        prop_assert_eq!(&sim.peek("sra").unwrap(), &want_sra, "sra by {} at width {}", by, width);
+        prop_assert_eq!(&sim.peek("zx").unwrap(), &want_zx, "zero_extend at width {}", width);
+        prop_assert_eq!(&sim.peek("sx").unwrap(), &want_sx, "sign_extend at width {}", width);
+        prop_assert_eq!(&sim.peek("tr").unwrap(), &want_tr, "truncate at width {}", width);
+    }
+
+    /// A shift by more than the width is the identity's opposite, not a panic.
+    ///
+    /// `sll` and `srl` yield zeros and `sra` sign-fills. Checking the edges
+    /// explicitly is worth the lines: these are the cases where the structural form
+    /// cannot be built at all, because there is no value to slice.
+    #[test]
+    fn shifts_past_the_width_are_the_documented_values(width in 1u32..=200, value in any::<u64>()) {
+        let d = Design::new();
+        let arg = d.input("a", width).unwrap();
+        let far = width + 5;
+        let sll = d.sll(&arg, far).unwrap();
+        let srl = d.srl(&arg, far).unwrap();
+        let sra = d.sra(&arg, far).unwrap();
+        d.output("sll", sll.width(), &sll).unwrap();
+        d.output("srl", srl.width(), &srl).unwrap();
+        d.output("sra", sra.width(), &sra).unwrap();
+        let mut sim = Sim::new(&d).unwrap();
+        let value = Bits::constant(value, width).unwrap();
+        sim.set_input("a", value.clone()).unwrap();
+        sim.comb().unwrap();
+        prop_assert_eq!(&sim.peek("sll").unwrap(), &Bits::zeros(width).unwrap());
+        prop_assert_eq!(&sim.peek("srl").unwrap(), &Bits::zeros(width).unwrap());
+        prop_assert_eq!(&sim.peek("sra").unwrap(), &value.sra(far).unwrap(), "sign fill at width {}", width);
+    }
+
+    /// A concatenation puts its first argument above its second, with *both* halves
+    /// live.
+    ///
+    /// The existing `cat_joins_high_to_low` property sets the low half to zeros,
+    /// which cannot distinguish "shifted into place" from "left where it was" --
+    /// shifting zero moves nothing. That is the gap that let a whole family of
+    /// width-changing operations go unchecked, so the low half is nonzero here.
+    #[test]
+    fn cat_places_both_halves(width in any_width()) {
+        let width = width.min(100);
+        let low_width = (width / 2).max(1);
+        let high_width = width - low_width + 1;
+        let d = Design::new();
+        let high = d.input("high", high_width).unwrap();
+        let low = d.input("low", low_width).unwrap();
+        let out = d.concat(&[high.clone(), low.clone()]).unwrap();
+        d.output("out", out.width(), &out).unwrap();
+        let mut sim = Sim::new(&d).unwrap();
+        // Every high bit set and a nonzero low half: a swapped concatenation, a
+        // missing shift, or a lost mask all change the answer.
+        let hv = Bits::ones(high_width).unwrap();
+        let lv = Bits::constant(
+            if low_width >= 64 { u64::MAX } else { (1u64 << low_width) - 1 },
+            low_width,
+        )
+        .unwrap();
+        sim.set_input("high", hv.clone()).unwrap();
+        sim.set_input("low", lv.clone()).unwrap();
+        sim.comb().unwrap();
+        let want = ferrite_lithic_bits::cat(&[&hv, &lv]).unwrap();
+        prop_assert_eq!(&sim.peek("out").unwrap(), &want, "cat {} over {}", high_width, low_width);
+    }
+}

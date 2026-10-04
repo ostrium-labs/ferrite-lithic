@@ -42,34 +42,10 @@ fn accumulator() -> (Design, Plan) {
     let out_ports =
         ferrite_lithic::outputs::<AccOutputs>(&design, &AccOutputs { q: held }).unwrap();
 
-    let inputs = vec![
-        Port {
-            name: "clk".to_string(),
-            width: 1,
-        },
-        Port {
-            name: "rst".to_string(),
-            width: 1,
-        },
-        Port {
-            name: "clr".to_string(),
-            width: 1,
-        },
-        Port {
-            name: "d".to_string(),
-            width: 8,
-        },
-    ];
-    let outputs = vec![Port {
-        name: "q".to_string(),
-        width: 8,
-    }];
-    let plan = Plan {
-        top: "accumulator".to_string(),
-        clock: Some("clk".to_string()),
-        inputs,
-        outputs,
-    };
+    let inputs = vec![Port::new("rst", 1), Port::new("clr", 1), Port::new("d", 8)];
+    let outputs = vec![Port::new("q", 8)];
+    // No `clk` in `inputs`: it is a port, but both backends drive it themselves.
+    let plan = Plan::new("accumulator", Some("clk".to_string()), inputs, outputs).unwrap();
     assert_eq!(in_ports.to_signals().len(), 4);
     assert_eq!(out_ports.to_signals().len(), 1);
     (design, plan)
@@ -79,39 +55,41 @@ fn accumulator() -> (Design, Plan) {
 fn the_simulator_side_runs_the_stimulus_and_produces_one_row_per_cycle() {
     let (design, plan) = accumulator();
     let mut stimulus = Stimulus::new();
-    // clk low, rst low, clr low, d=5. The clock column is present because the
-    // module declares it; both backends drive the clock themselves.
-    stimulus
-        .push(vec![
-            Bits::zeros(1).unwrap(),
-            Bits::zeros(1).unwrap(),
-            Bits::zeros(1).unwrap(),
-            Bits::constant(5, 8).unwrap(),
-        ])
-        .unwrap();
-    for _ in 0..3 {
+    // rst, clr, d -- and no clock column, because the clock is a port but not a
+    // stimulus value: both backends drive it themselves. Every gate is exercised,
+    // because a run that only ever loads a register cannot tell "held" from
+    // "loaded the same value again".
+    let rows: [(u64, u64, u64); 5] = [
+        (0, 0, 5), // 0 + 5 = 5
+        (0, 0, 0), // holds
+        (1, 0, 0), // reset wins over the data
+        (0, 1, 7), // clear holds, and beats the data
+        (0, 0, 3), // 0 + 3 = 3, so the clear really did hold it
+    ];
+    for (rst, clr, d) in rows {
         stimulus
             .push(vec![
-                Bits::ones(1).unwrap(),
-                Bits::zeros(1).unwrap(),
-                Bits::zeros(1).unwrap(),
-                Bits::constant(0, 8).unwrap(),
+                Bits::constant(rst, 1).unwrap(),
+                Bits::constant(clr, 1).unwrap(),
+                Bits::constant(d, 8).unwrap(),
             ])
             .unwrap();
     }
 
     let observed = ferrite_lithic_cosim::simulate(&design, &plan, &stimulus).unwrap();
-    assert_eq!(observed.len(), 4);
+    assert_eq!(observed.len(), 5);
     // `Sim::step` drives the clock itself -- high, then low -- so one step *is*
-    // one rising edge, whatever the stimulus's clock column says. That is why
-    // the first row is already 5: the edge it applied was the first one.
-    assert_eq!(observed[0][0].to_u64().unwrap(), 5, "after the first edge");
+    // one rising edge. That is why the first row is already 5: the edge it
+    // applied was the first one.
+    let seen: Vec<u64> = observed
+        .iter()
+        .map(|row| row[0].to_u64().unwrap())
+        .collect();
     assert_eq!(
-        observed[1][0].to_u64().unwrap(),
-        5,
-        "d was zero, so it holds"
+        seen,
+        [5, 5, 0, 0, 3],
+        "accumulate, hold, reset, hold, accumulate"
     );
-    assert_eq!(observed[2][0].to_u64().unwrap(), 5);
 }
 
 #[test]
@@ -323,14 +301,8 @@ fn a_combinational_module_gets_a_settle_instead_of_an_edge() {
     let plan = Plan {
         top: "comb".to_string(),
         clock: None,
-        inputs: vec![Port {
-            name: "d".to_string(),
-            width: 8,
-        }],
-        outputs: vec![Port {
-            name: "q".to_string(),
-            width: 8,
-        }],
+        inputs: vec![Port::new("d", 8)],
+        outputs: vec![Port::new("q", 8)],
     };
     let source = driver_source(&plan);
     assert!(!source.contains("dut->clk"), "{source}");
@@ -345,10 +317,10 @@ fn the_driver_masks_every_port_to_its_declared_width() {
         source.contains("dut->d = std::strtoull(word, nullptr, 16) & mask<8>"),
         "{source}"
     );
-    assert!(source.contains("dut->q & mask<8>"), "{source}");
+    assert!(source.contains("dut->q & mask<8>()"), "{source}");
     assert!(
-        source.contains("mask<1>"),
-        "the clock is masked too: {source}"
+        source.contains("dut->rst = std::strtoull(word, nullptr, 16) & mask<1>()"),
+        "a one-bit port is masked too: {source}"
     );
 }
 
@@ -357,22 +329,31 @@ fn the_driver_refuses_a_port_wider_than_it_can_drive_rather_than_truncating() {
     // A `static_assert` in the generated C++ rather than a runtime check: the
     // failure should be a compile error in the harness, where the stack trace
     // points at the design, not a divergence three cycles later.
-    let source = driver_source(&Plan {
-        top: "wide".to_string(),
-        clock: Some("clk".to_string()),
-        inputs: vec![Port {
-            name: "d".to_string(),
-            width: 8,
-        }],
-        outputs: vec![Port {
-            name: "q".to_string(),
-            width: 8,
-        }],
-    });
-    assert!(source.contains("static_assert(W <= 64"), "{source}");
+    let plan = Plan::new(
+        "wide",
+        Some("clk".to_string()),
+        vec![Port::new("d", 8)],
+        vec![Port::new("q", 8)],
+    )
+    .unwrap();
+    let source = driver_source(&plan);
+    assert!(
+        source.contains("static_assert(W >= 1 && W <= 64"),
+        "{source}"
+    );
     assert!(
         source.contains("ports up to 64 bits wide"),
         "and says which port widths it will drive: {source}"
+    );
+    // Before `main`, because after it is a compile error the moment a port is
+    // driven -- and a text comparison of the driver cannot see that.
+    let mask_at = source
+        .find("template <int W>")
+        .expect("the template is emitted");
+    let main_at = source.find("int main(").expect("main is emitted");
+    assert!(
+        mask_at < main_at,
+        "mask must be declared before main:\n{source}"
     );
 }
 
@@ -386,7 +367,7 @@ fn a_plan_reads_its_ports_from_the_design_it_will_emit() {
         design.input_ports().iter().map(|s| s.id()).collect(),
         design.output_ports().iter().map(|s| s.id()).collect(),
     );
-    let plan = Plan::of(&design, &module);
+    let plan = Plan::of(&design, &module).unwrap();
 
     assert_eq!(plan.top, "accumulator");
     assert_eq!(plan.clock.as_deref(), Some("clk"));
@@ -395,10 +376,11 @@ fn a_plan_reads_its_ports_from_the_design_it_will_emit() {
             .iter()
             .map(|p| p.name.as_str())
             .collect::<Vec<_>>(),
-        ["clk", "rst", "clr", "d"]
+        // No `clk`: it is a port but not a stimulus column.
+        ["rst", "clr", "d"]
     );
-    assert_eq!(plan.output_names(), ["q"]);
-    assert_eq!(plan.input_widths(), [1, 1, 1, 8]);
+    // The widths follow the same list, so the clock's 1 bit is not in it either.
+    assert_eq!(plan.input_widths(), [1, 1, 8]);
 }
 
 #[test]
@@ -421,14 +403,8 @@ fn a_plan_with_no_clock_emits_a_combinational_module() {
     let plan = Plan {
         top: "adder".to_string(),
         clock: None,
-        inputs: vec![Port {
-            name: "a".to_string(),
-            width: 4,
-        }],
-        outputs: vec![Port {
-            name: "y".to_string(),
-            width: 4,
-        }],
+        inputs: vec![Port::new("a", 4)],
+        outputs: vec![Port::new("y", 4)],
     };
     // `b` is declared by the design but not in the plan: the plan says which
     // ports the driver drives, so the emitted module still declares it.
@@ -537,28 +513,114 @@ fn a_width_outside_the_generator_limits_is_refused() {
 }
 
 fn plan_for(generated: &generator::Generated) -> Plan {
-    let inputs = generated
-        .design
-        .input_ports()
-        .iter()
-        .map(|signal| Port {
-            name: signal.name().expect("a generated input is named"),
-            width: signal.width(),
-        })
-        .collect();
-    let outputs = generated
-        .design
-        .output_ports()
-        .iter()
-        .map(|signal| Port {
-            name: signal.name().expect("a generated output is named"),
-            width: signal.width(),
-        })
-        .collect();
-    Plan {
-        top: "random".to_string(),
-        clock: Some("clk".to_string()),
-        inputs,
-        outputs,
-    }
+    // `Plan::of` rather than a hand-built list, so the clock is excluded by the
+    // same code that builds a plan in anger. A hand-built list is how the clock
+    // ended up in the stimulus columns in the first place.
+    let module = ferrite_lithic_rtl::Module::new(
+        "random",
+        generated.design.build().unwrap(),
+        generated
+            .design
+            .input_ports()
+            .iter()
+            .find(|signal| signal.name().as_deref() == Some("clk"))
+            .expect("a generated design has a clock")
+            .id(),
+        generated
+            .design
+            .input_ports()
+            .iter()
+            .map(|s| s.id())
+            .collect(),
+        generated
+            .design
+            .output_ports()
+            .iter()
+            .map(|s| s.id())
+            .collect(),
+    );
+    Plan::of(&generated.design, &module).unwrap()
+}
+
+#[test]
+fn a_clock_that_is_also_a_stimulus_column_is_refused_when_the_plan_is_built() {
+    // The failure this prevents is silent and total: the driver applies the input
+    // columns, one of which is the clock, and *then* raises the clock for the
+    // edge. A stimulus word of 1 there means the clock was already high, so the
+    // "edge" is not an edge, no register updates, and every output is constant --
+    // which two backends agree on perfectly well.
+    let error = Plan::new(
+        "twice",
+        Some("clk".to_string()),
+        vec![Port::new("clk", 1)],
+        vec![Port::new("q", 8)],
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("also a stimulus column"),
+        "{error}"
+    );
+}
+
+#[test]
+fn the_stimulus_file_states_its_cycle_count_first() {
+    // Without a count the harness's loop has to end at end-of-file, which cannot
+    // express a module with no inputs at all, and a file whose length disagrees
+    // with its contents looks exactly like one that simply ended.
+    let mut stimulus = Stimulus::new();
+    stimulus
+        .push(vec![Bits::constant(0xab, 8).unwrap()])
+        .unwrap();
+    stimulus
+        .push(vec![Bits::constant(0xcd, 8).unwrap()])
+        .unwrap();
+    assert_eq!(
+        stimulus.encode(&[8]).unwrap(),
+        "2\nab\ncd\n",
+        "the count is the first line, then one row per cycle"
+    );
+}
+
+#[test]
+fn a_module_with_no_input_ports_still_has_a_bounded_number_of_cycles() {
+    // A counter, or an LFSR with no data in, has no inputs, so the driver reads
+    // nothing per cycle and end-of-file gives it no way to know a cycle happened.
+    // The first version of this loop was `while (ports == 0 || fscanf(...) == 1)`,
+    // which is an infinite loop rather than a solution.
+    let plan = Plan::new(
+        "free_running",
+        Some("clk".to_string()),
+        Vec::new(),
+        vec![Port::new("q", 8)],
+    )
+    .unwrap();
+    let source = driver_source(&plan);
+    assert!(
+        source.contains("for (unsigned long cycle = 0; cycle < cycles; cycle++)"),
+        "the loop is bounded by the count, not by input: {source}"
+    );
+    assert!(
+        !source.contains("while (ports == 0"),
+        "and is not the infinite loop the first version used: {source}"
+    );
+}
+
+#[test]
+fn the_driver_rejects_a_stimulus_whose_contents_disagree_with_its_count() {
+    let plan = Plan::new(
+        "counted",
+        None,
+        vec![Port::new("d", 8)],
+        vec![Port::new("q", 8)],
+    )
+    .unwrap();
+    let source = driver_source(&plan);
+    assert!(
+        source.contains("stimulus has words past its"),
+        "a file with more rows than it declared is an error: {source}"
+    );
+    assert!(
+        source.contains("stimulus ended in cycle"),
+        "and so is one with fewer: {source}"
+    );
 }

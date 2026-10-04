@@ -8,14 +8,22 @@
 //! any disagreement downstream is therefore about the design rather than about
 //! two different input sequences.
 //!
-//! # Hex words, not a format
+//! # The file format
 //!
-//! The file is whitespace-separated hex words, one per input port per cycle, with
-//! no separators and no header. Not because a terse format is nicer to read but
-//! because it has no failure modes: a `fscanf("%s")` in the generated C++ cannot
-//! mis-parse it, and the Rust side knows each word's width from the port list, so
-//! a value that does not fit is caught before the file is written rather than
-//! silently truncated by a reader that stopped caring.
+//! A decimal cycle count on the first line, then whitespace-separated hex words,
+//! one per input port per cycle, with no other separators. Not because a terse
+//! format is nicer to read but because it has no failure modes: a `fscanf("%s")`
+//! in the generated C++ cannot mis-parse it, and the Rust side knows each word's
+//! width from the port list, so a value that does not fit is caught before the file
+//! is written rather than silently truncated by a reader that stopped caring.
+//!
+//! The count is not decoration. Without it the harness's loop has to end at
+//! end-of-file, which cannot express a module with no input ports at all — a
+//! counter, or an LFSR with no data in — and a file whose contents disagree with
+//! its length is then indistinguishable from one that simply ended. The count
+//! makes both of those an error.
+//!
+//! The clock is *not* one of the columns, for the reason `Plan::new` gives.
 
 use ferrite_lithic_bits::Bits;
 
@@ -68,15 +76,20 @@ impl Stimulus {
         self.rows.get(cycle as usize).map(Vec::as_slice)
     }
 
-    /// The stimulus as the harness's input: hex words, whitespace separated.
+    /// The stimulus as the harness's input: a cycle count, then hex words.
     ///
     /// # Errors
     ///
     /// [`Error::Width`] if a value is not the width of the input port at its
     /// position. The check is repeated here because this is the boundary where a
     /// value becomes text.
+    ///
+    /// The first line is the number of cycles. `widths` must not include the
+    /// clock: the clock is a port but both backends drive it themselves, and a
+    /// column for it would mean a word that the generated driver applies and then
+    /// overwrites the clock with.
     pub fn encode(&self, widths: &[u32]) -> Result<String, Error> {
-        let mut out = String::new();
+        let mut out = format!("{}\n", self.rows.len());
         for (cycle, row) in self.rows.iter().enumerate() {
             if row.len() != widths.len() {
                 return Err(Error::Arity {

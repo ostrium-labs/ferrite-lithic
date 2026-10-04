@@ -36,6 +36,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "crc"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5eb8a2a1cd12ab0d987a5d5e825195d372001a4094a0376319d5a0ad71c1ba0d"
+dependencies = [
+ "crc-catalog",
+]
+
+[[package]]
+name = "crc-catalog"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
+
+[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -68,6 +83,23 @@ version = "0.0.1"
 dependencies = [
  "num-bigint",
  "num-traits",
+ "proptest",
+]
+
+[[package]]
+name = "ferrite-lithic-corpus"
+version = "0.0.1"
+dependencies = [
+ "crc",
+ "ferrite-lithic",
+ "ferrite-lithic-bits",
+ "ferrite-lithic-cosim",
+ "ferrite-lithic-derive",
+ "ferrite-lithic-ir",
+ "ferrite-lithic-rtl",
+ "ferrite-lithic-sim",
+ "ferrite-lithic-tb",
+ "ferrite-lithic-wave",
  "proptest",
 ]
 
@@ -125,6 +157,17 @@ dependencies = [
  "ferrite-lithic-rtl",
  "ferrite-lithic-wave",
  "proptest",
+]
+
+[[package]]
+name = "ferrite-lithic-tb"
+version = "0.0.1"
+dependencies = [
+ "ferrite-lithic",
+ "ferrite-lithic-bits",
+ "ferrite-lithic-derive",
+ "ferrite-lithic-sim",
+ "ferrite-lithic-wave",
 ]
 
 [[package]]

@@ -235,4 +235,27 @@ impl Module {
     pub fn emit(&self) -> Result<String, Error> {
         crate::emit::emit_module(self)
     }
+
+    /// The identifiers this module will *write* for its ports: inputs then outputs,
+    /// in port order.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Module::emit`] reports.
+    ///
+    /// # Why this has to exist
+    ///
+    /// The identifier a port gets is not its name. A port called `byte` is declared
+    /// `byte_`, because `byte` is a SystemVerilog keyword, and a port called `a-b`
+    /// is declared `a_b` -- and if a second port is also called `a.b` then one of
+    /// them gets `a_b_1`, which no function of a single name can predict.
+    ///
+    /// So anything that has to *address* the ports of emitted Verilog -- a
+    /// cosimulation driver assigning `dut-><name>` -- has to ask the emitter which
+    /// identifiers it used, rather than guessing. Guessing is what made a plan and a
+    /// module disagree: the module declared `byte_` and the driver assigned `byte`,
+    /// and the error that came back named the emitter.
+    pub fn port_identifiers(&self) -> Result<Vec<String>, Error> {
+        crate::emit::port_identifiers(self)
+    }
 }

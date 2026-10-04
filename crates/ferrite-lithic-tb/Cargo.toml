@@ -1,0 +1,21 @@
+[package]
+name = "ferrite-lithic-tb"
+description = "Coroutine-style step testbenches for Ferrite Lithic designs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+ferrite-lithic = { path = "../ferrite-lithic", version = "0.0.1" }
+ferrite-lithic-bits = { path = "../ferrite-lithic-bits", version = "0.0.1" }
+ferrite-lithic-sim = { path = "../ferrite-lithic-sim", version = "0.0.1" }
+ferrite-lithic-wave = { path = "../ferrite-lithic-wave", version = "0.0.1" }
+
+[dev-dependencies]
+ferrite-lithic-derive = { path = "../ferrite-lithic-derive", version = "0.0.1" }
