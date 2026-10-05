@@ -8,7 +8,7 @@ Everything known about this project in one place. Companion documents:
 - `../ferrite-strata/DETAILS.md` — the companion runtime
 
 Status: **Phases A1 through A3 are implemented and tested, and the whole workspace is
-green.** All nine tool crates and `ferrite-lithic-corpus` pass: 810 tests, 753 of them
+green.** All nine tool crates and `ferrite-lithic-corpus` pass: 811 tests, 753 of them
 unit and integration tests and 57 doctests, with Verilator and Icarus both installed so
 that every equivalence test really ran rather than taking its skip path. Nothing is
 published to crates.io yet.
@@ -966,9 +966,14 @@ sense, is the interesting part, and the reasons are not all the same:
   toolchain cheaply, and because a nibble or sextet table is the smallest honest test of
   whether a ROM lowers correctly.
 - **`memchr`, `aho-corasick` and the `regex-automata` DFA** — one state register, one
-  transition table, one byte per edge. `memchr` is in the corpus as the honest baseline
-  and loses to the CPU by a measured 4843x; the argument for the tier is the
-  multi-pattern search, where no SIMD form exists.
+  transition table, one byte per edge. `memchr` is in the corpus as the honest baseline,
+  and it loses: 4.2x, measured per byte against the `memchr` crate at an assumed 1 GHz,
+  where the design retires one byte per clock edge and the crate retires 32 bytes per AVX2
+  instruction. The number needs its caveats, and `docs/benchmarks.md` carries them: a
+  design cycle is not a nanosecond until a clock is stated, and `memchr`'s 5-level depth
+  means the figure is not load-bearing either way. The tier stands because multi-pattern
+  search has no SIMD form and a 19-state automaton shares one ROM across lanes — not
+  because the single-byte case is close.
 - **the columnar kernels** — `bitpack`, `rle`, `roaring`, `hamming`, `sorting`, and the
   three sketches. Decode kernels, a running kernel, and a sorting network measured for
   depth rather than for layer count.
@@ -1000,7 +1005,7 @@ the `crc` crate's own `Algorithm` type. The transcription is checked against the
 catalogue's published check value before any of it is trusted, because a
 hand-transcribed parameter set that is wrong agrees with a wrong design perfectly.
 
-What this says about the toolchain is not flattering: 810 tests across ten crates,
+What this says about the toolchain is not flattering: 811 tests across ten crates,
 and a design with 60 lines of shift and XOR found four bugs in a row. The tests were
 not bad, they were aimed at the wrong things. `sll` and `srl` were swapped for the
 entire life of the project and every crate agreed with every other crate about it.

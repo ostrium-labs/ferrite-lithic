@@ -124,7 +124,7 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-810 tests across the ten crates, 57 of them doctests: 96 in `ferrite-lithic-bits`,
+811 tests across the ten crates, 57 of them doctests: 96 in `ferrite-lithic-bits`,
 116 in `ferrite-lithic-ir`, 58 in the front end, 52 in the simulator, 52 in the
 Verilog emitter, 39 in `ferrite-lithic-derive`, 42 in `ferrite-lithic-wave`, 33 in
 `ferrite-lithic-cosim`, 17 in `ferrite-lithic-tb` and 294 in
@@ -467,11 +467,30 @@ The designs are grouped into tiers, and the tier is the argument for including t
 Three results from the newer tiers belong here rather than only in `DETAILS.md`,
 because two of them are disagreements rather than designs.
 
-**The CPU wins `memchr` by 4843x, and that is why the entry exists.** Measured
-rather than assumed: 2540 ns/byte for the design against 0.52 ns/byte for the
-crate. The surviving argument for the automata tier is the multi-pattern one, where
-no SIMD formulation exists and a 5–19 state automaton shares one ROM across lanes. A
-design that claimed to beat AVX2 at single-byte search would have been dishonest, so
+**The CPU wins `memchr`, and the honest margin is small.** The design retires one byte per
+clock edge; the crate retires 32 bytes per AVX2 instruction. Measured per byte against the
+crate that defines each algorithm, at an assumed 1 GHz:
+
+| design | cycles/byte | software | verdict |
+|---|---:|---|---|
+| `crc32` | 1.00 | `crc32fast` | software 8.6x faster |
+| `crc3` | 1.00 | `crc` | **hardware 2.2x faster** |
+| `hex` | 3.00 | `hex` | **hardware 1.4x faster** |
+| `base64` | 5.33 | `base64` | software 13.8x faster |
+| `memchr` | 1.01 | `memchr` | software 4.2x faster |
+
+Two of the five beat their reference implementation, which is not the result this project
+expected to publish and is the reason the benchmark was written. Each row asserts both
+sides produce identical output before either is timed.
+
+The ratios need a caveat stated rather than buried. The design column is **clock edges**, the
+software column is **wall clock on this host**, and converting between them requires a
+clock — so the frequency is part of the claim: double it and every design halves. Read them
+with the combinational-depth table too. `crc32` is 34 operator levels deep, so its real
+figure is *worse* than 8.6x, because logic that deep does not close at 1 GHz.
+
+The surviving argument for the automata tier is the multi-pattern one, where
+no SIMD formulation exists and a 19-state automaton shares one ROM across lanes, so
 `memchr` is in the corpus as the baseline the other two are measured against.
 
 **`regex-automata`'s forward dense DFA does not reproduce its own `find_iter`.**
