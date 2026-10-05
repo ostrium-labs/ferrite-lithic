@@ -1,0 +1,144 @@
+---
+title: OCaml, and the idea of a hardware DSL
+description: The three ways people write hardware, what a hardware construction language actually is, and which OCaml features carry weight in one.
+---
+
+Almost everything in this project is a port. The architecture came from OCaml, and the
+specific library came from Hardcaml. This page explains that lineage, because the design
+makes no sense without it — several choices that look arbitrary are Hardcaml's choices
+that survived the translation.
+
+<Steps>
+
+<Step title="There are three ways to write hardware, not one">
+The vocabulary people actually use:
+
+- **HDL — hardware description languages.** SystemVerilog and VHDL. You describe gates,
+  registers and their connections. Historically you also write the testbench, in the same
+  language, which means two languages to learn and a boundary where mistakes hide.
+- **HLS — high-level synthesis.** You write C or C++, and a compiler generates hardware.
+  Convenient, and the cycle-by-cycle timing is *not* specified by you: the compiler
+  decides. You guide it with pragmas.
+- **HCL — hardware construction languages.** You write a program in an ordinary
+  general-purpose language, and running that program *builds a data structure describing
+  the circuit*. Chisel (Scala), Clash (Haskell), MyHDL (Python), SpinalHDL (Scala), and
+  Hardcaml (OCaml) are all in this family.
+
+Ferrite Lithic is an HCL in Rust. That is an unusual member of the family, and the rest
+of this page is largely about why the unusual choice is defensible.
+</Step>
+
+<Step title="The defining trick: the program builds a graph">
+Here is the idea that makes the whole family work, and it is worth being precise about
+because it is the thing that is easy to get wrong.
+
+When a Hardcaml program runs, **it does not simulate anything and it does not compute a
+result**. It constructs a data structure that represents the circuit the programmer
+described. The program's control flow is *build time*. Its "values" are descriptions of
+wires, not the contents of wires.
+
+So this is meta-programming, and it is the whole point:
+
+```ocaml
+let spec = Signal.Reg_spec.create clock clear
+let q = Signal.reg spec ~enable:Signal.vdd d_in
+```
+
+Running that does not delay `d_in` by a cycle. It adds a register *node* to the circuit
+being built. Three things then happen to that node, and they are independent of each
+other: something simulates it, something converts it to Verilog, and something analyses it.
+
+This independence is the structural reason the equivalence check in this project is even
+possible. Two backends read *one* graph. They cannot disagree about the graph, because
+there is only one.
+</Step>
+
+<Step title="Which OCaml features are actually load-bearing">
+Not all of OCaml matters here. These are the ones doing real work in Hardcaml:
+
+- **Higher-order functions and parametric modules (functors).** A design can be written
+  once and instantiated at different widths, or reused across projects. Hardcaml leans on
+  this heavily, and it is the feature the ecosystem most values.
+- **Algebraic data types, used for hardware meaning.** Hardcaml's `With_valid` is a record
+  of a one-bit `valid` signal and a value, and the documentation describes it as working
+  "a little like an `Option` type" — `Some`/`None` become "there is a value here" and
+  "this wire is not valid this cycle". In a language where every wire is just a number,
+  the only way to express *absence* is to build it into the type system.
+- **PPX (preprocessor extensions).** Hardcaml ships `ppx_hardcaml`, which reads an OCaml
+  record declaration and generates the interface plumbing, so a module's ports are a
+  record rather than a hand-maintained list of strings. This project does the same thing
+  with `#[derive(PortList)]`, and the reasoning is identical: a width that appears in one
+  place and not the other is a bug that compiles.
+- **A testing story that already existed.** Hardcaml's documentation cites QuickCheck as
+  the main reason to stay in a general-purpose language — you get property-based testing for
+  free. This project reached for `proptest` for the same reason.
+</Step>
+
+<Step title="Why OCaml specifically, according to Hardcaml's own documentation">
+The stated advantages are worth quoting in spirit, because this project inherited all of
+them and none of them are language-theoretical:
+
+- Reuse standard tooling — editor integration, CI.
+- Highly parameterised designs, written once and instantiated many ways.
+- The type system enforcing invariants on types.
+- Standard libraries usable *inside* hardware designs and testbenches.
+
+The stated disadvantage is just as relevant: **generated HDL looks nothing like what a
+human would write**, and the generator invents names that mean nothing when you are reading
+vendor tool logs. That is a real ergonomic cost and this project pays it too — the emitter
+produces structural Verilog that is correct and comprehensible, but it is not the Verilog
+an engineer would have typed.
+</Step>
+
+<Step title="What OCaml gives up, and where Rust is genuinely better">
+A fair comparison has to include this, because the usual framing is one-sided:
+
+- **Signedness is not in the type.** Hardcaml's documentation is explicit that signedness is
+  *not* encoded into the type of a vector; instead the operator suffix says how to interpret
+  the operands, so there are separate signed and unsigned less-than operators, and
+  "agnostic to signedness" operators exist. In Rust, `i32` and `u32` are different types
+  and the compiler will not let you compare one with the other. For an HDL, that is a real
+  improvement, and this project's bitvector crate inherits it.
+- **Unsigned multiplication widens, but comparison truncates.** Hardcaml's rules are
+  specific: binary operations require equal widths and return the same width; multiplication
+  accepts arbitrary widths and returns the sum; comparison returns one bit. In Rust, integer
+  overflow in debug builds panics and wraps in release builds — which for hardware is
+  arguably the *worst* possible default, because the correct behaviour depends on whether
+  the value is meant to wrap. This is why the bitvector crate makes width growth explicit
+  rather than inheriting Rust's silent behaviour.
+- **Zero-width vectors are a special case.** Hardcaml disallows them and then provides a
+  `With_zero_width` wrapper where `Comb` is an `'a option`, so "no bits" and "zero-valued
+  bits" stay distinguishable. Rust's `Vec<u64>` backing store has the same distinction
+  available more naturally.
+</Step>
+
+<Step title="Where this project departs, and why">
+Three places where the translation is not mechanical:
+
+1. **The IR is an arena, not a mutable graph of OCaml values.** Hardcaml wires are
+   assignable, and the library detects combinational cycles at simulation time. This
+   project separates arena construction from driving and runs the topological sort itself.
+2. **Widths are runtime values, not static.** This was a deliberate trade — ADR-0003 —
+   because graph construction is loops and generators, which is exactly where const
+   generics in the type system hurt. See the next-but-one page for the honest accounting.
+3. **The simulator is a cycle-based engine over an enum of operations**, not a graph of
+   OCaml closures (ADR-0008), which is what makes a corpus of designs fast enough to check
+   three ways each.
+</Step>
+
+</Steps>
+
+<ul className="notes">
+  <Note kind="upstream" title="Hardcaml is Jane Street's, and it is used in production">
+    It is a real OCaml library, not a paper design: it includes a simulation backend as
+    well as RTL output, targets FPGA flows through Vivado and Quartus, and offers a
+    high-performance backend that compiles designs to C for faster simulation.
+  </Note>
+  <Note kind="decision" title="This is a port, and the ADRs say so">
+    ADR-0006 is titled "Port Hardcaml's design, write tests from behaviour" — the two
+    halves of that title are the two halves of the method. Taking the architecture from a
+    battle-tested design, and taking the *tests* from behaviour rather than from the
+    source, is why the corpus checks against the original crate instead of against a
+    reimplementation of it.
+  </Note>
+</ul>

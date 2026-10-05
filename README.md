@@ -40,6 +40,13 @@ emitter's contract and the port-list rule are in `docs/design-notes.md`, the
 nineteen accepted decisions are in `docs/adr/`, and `DETAILS.md` is the single
 place everything known lives.
 
+The documentation site is in [`site/`](site/). Fifteen pages in reading order:
+the background a hardware DSL needs, the OCaml and Hardcaml lineage this is a port
+of, an honest accounting of what Rust's type system does and does not check, and
+then the nine crates bottom-up. It is a React Router app with Fumadocs MDX as the
+content layer; `site/README.md` explains why it is not using the Fumadocs UI, and
+`site/verify.mjs` drives a real browser over every route.
+
 ### What finishing the entropy tier cost
 
 The last tier arrived in one commit and had never been run: **fourteen of its tests

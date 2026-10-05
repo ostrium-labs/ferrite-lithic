@@ -1,0 +1,156 @@
+/* ==========================================================================
+   Ferrite Lithic — design tokens
+   --------------------------------------------------------------------------
+   Built from the subject, not from a template.
+
+   THE SUBJECT
+   Ferrite Lithic is a hardware DSL: bitvectors, gates, clock edges, waveforms.
+   Its native documents are datasheets, timing diagrams and logic-analyzer
+   screens. Its native failure mode is a constant that looks right and means the
+   opposite — so a third of this site is about defects, and the design has to be
+   able to say "wrong" in a colour of its own.
+
+   THE GROUND: WHY PAPER
+   Dark-with-neon is the reflex choice for anything hardware, which is exactly
+   why it was rejected. This site is 90% long-form documentation, and long-form
+   reading on a light ground is measurably more comfortable. More to the point, a
+   signal drawn on paper is what every piece of real test equipment looks like:
+   an oscilloscope trace, a plotter drawing, a timing diagram in a datasheet. The
+   aesthetic and the function are the same choice.
+
+   THE ACCENT: ONE, AND IT MEANS SOMETHING
+   Sodium amber — the colour of a trace — is the only accent, and it is spent
+   exclusively on signal semantics: live data, the current item, a value the
+   reader should look at. Fault red is the second colour and is reserved for
+   defects. There is no third. A palette with six accents has no accent; every
+   hue that appears on a page must be asking for attention, and if six are, none
+   is.
+
+   THE VOICE
+   Monospace is not a "small data label" style here, it is the content. Port
+   names, bit widths, hash constants and offsets are the subject matter, and
+   setting an identifier in a proportional face misrepresents its shape: 1l1I
+   and 0O must be told apart by the reader, and a proportional face hides that.
+   So the mono is the voice, and Archivo carries the prose.
+
+   THE MEMORABLE THING
+   One: a self-drawing timing diagram in the hero. Everything else on this site
+   is quiet. Boldness spent once reads as confidence; spent everywhere it reads
+   as noise.
+   ========================================================================== */
+
+:root {
+  /* ---------------------------------------------------------------- colour */
+
+  /* Six core values. Everything else on the page is one of these at an alpha. */
+  --paper: #e9ebe9; /* cool neutral ground, a shade off drafting paper */
+  --paper-raised: #f5f6f4; /* code, figures: one step up off the ground */
+  --ink: #14181a; /* primary: a cool near-black, not a tinted #111 */
+  --ink-soft: #4e5754; /* secondary prose and captions */
+  --signal: #b4531b; /* sodium amber — the trace colour, the only accent */
+  --fault: #9e2b1c; /* defects, and only defects */
+
+  /* Structure, derived rather than chosen, so the rules stay in relationship
+     with the ink instead of being a second palette to maintain. */
+  --rule: color-mix(in oklab, var(--ink) 15%, transparent);
+  --rule-strong: color-mix(in oklab, var(--ink) 30%, transparent);
+  --rule-faint: color-mix(in oklab, var(--ink) 8%, transparent);
+  --grid: color-mix(in oklab, var(--ink) 11%, transparent);
+  --signal-wash: color-mix(in oklab, var(--signal) 9%, var(--paper));
+  --fault-wash: color-mix(in oklab, var(--fault) 8%, var(--paper));
+
+  /* ------------------------------------------------------------------ type */
+
+  /* Two families, clearly distinct: a grotesque for prose, a mono for data. */
+  --face-text: "Archivo", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --face-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* A modular scale near 1.26 (a major third), floored so the small end stays
+     legible rather than shrinking toward uselessness. */
+  --t-micro: 0.75rem; /* 12 — data labels, captions */
+  --t-small: 0.8125rem; /* 13 — the workhorse small size */
+  --t-body-sm: 0.875rem; /* 14 — dense UI, table cells */
+  --t-body: 1rem; /* 16 — body */
+  --t-lede: 1.0625rem; /* 17 — the paragraph under a heading */
+  --t-h3: 1.25rem; /* 20 */
+  --t-h2: clamp(1.5rem, 1.25rem + 1.1vw, 1.875rem); /* 24–30 */
+  --t-h1: clamp(2rem, 1.5rem + 2vw, 2.75rem); /* 32–44, doc pages */
+  --t-hero: clamp(2.75rem, 1.4rem + 5.4vw, 5.25rem); /* 44–84, landing */
+
+  /* Line length. 34rem of Archivo at 16px is about 70 characters, which is
+     inside the 80-character ceiling the type calls for. Measured in rem, not
+     ch: `ch` resolves against each element's own size, so one `ch` measure
+     would mean two different columns in two different places. */
+  --measure: 34rem;
+  --measure-wide: 46rem;
+
+  --lh-body: 1.65;
+  --lh-tight: 1.15; /* display and headings */
+  --lh-code: 1.7;
+
+  /* ----------------------------------------------------------------- space */
+
+  /* 4px base. Named so the rhythm is legible in the source. */
+  --s-1: 0.25rem;
+  --s-2: 0.5rem;
+  --s-3: 0.75rem;
+  --s-4: 1rem;
+  --s-5: 1.5rem;
+  --s-6: 2rem;
+  --s-7: 3rem;
+  --s-8: 4rem;
+  --s-9: 6rem;
+  --gutter: clamp(1.25rem, 4vw, 3.5rem);
+
+  /* ------------------------------------------------------------- structure */
+
+  /* Radius is now nearly absent, which is the point: on this site a rounded
+     rectangle means "a control", and a control is a small minority of the page.
+     Everything else is separated by a rule, the way a datasheet separates its
+     sections. */
+  --r-control: 2px;
+  --r-pill: 999px; /* reserved for the two or three genuinely round things */
+
+  /* The dot grid is graph paper at an 8px pitch, drawn behind the content at
+     low alpha. It is the substrate, so it sits behind everything and is never
+     allowed to compete with text. */
+  --grid-pitch: 8px;
+  --grid-dot: 1px;
+
+  /* ---------------------------------------------------------------- motion */
+
+  /* One scale, three steps. Anything that is not either feedback on a person's
+     action or the single hero sequence does not move at all. */
+  --d-fast: 120ms;
+  --d-base: 200ms;
+  --d-slow: 400ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* ==========================================================================
+   The same tokens, inverted, for the one thing that is a screen rather than a
+   document: a waveform.
+   --------------------------------------------------------------------------
+   An instrument reads light-on-dark because that is what a phosphor does, and
+   every diagram on this site is an instrument — a timing diagram, a bit stream, a
+   logic-analyzer trace. Prose and code are both *text*, so both stay on paper;
+   only the drawings flip.
+
+   The point of flipping just the drawings is that the trace colour is at full
+   contrast on both grounds. The amber means the same thing in a paragraph and in
+   a scope screenshot, which is what makes a figure here look like it belongs to
+   the page rather than dropped into it.
+
+   Applied via the `instrument` class where an element needs the custom properties
+   in scope. The canvases carry the inverted values as literal colours in
+   `app/lib/ticker.ts`, because canvas cannot read custom properties.
+   ========================================================================== */
+
+.instrument {
+  --paper: #14181a;
+  --paper-raised: #1b2022;
+  --ink: #e9ebe9;
+  --ink-soft: #a4ada9;
+  --signal: #e8894a;
+  --fault: #d4695a;
+}

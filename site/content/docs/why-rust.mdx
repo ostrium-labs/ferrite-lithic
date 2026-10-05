@@ -1,0 +1,147 @@
+---
+title: Why Rust, honestly
+description: What Rust's type system does and does not give a hardware DSL, where compile-time checking was deliberately given up, and what actually does the verifying.
+---
+
+This page is the one most likely to overclaim, so it is structured around what the
+choice does **not** buy. If you read only one section, read the first one.
+
+<Steps>
+
+<Step title="Rust does not check your widths at compile time" figure={{ value: "runtime", unit: "widths are values, not types", caption: "ADR-0003. Graph construction is loops and generators, which is exactly where const generics hurt — so the trade was made deliberately and the error messages carry the compensation." }}>
+The popular version of this argument is that Rust's type system catches hardware bugs at
+compile time. **It does not, here, and that is a decision rather than a limitation.**
+
+Widths are runtime values. A width mismatch during graph construction is a *runtime*
+event, reported as a typed `Error::WidthMismatch` that names the operation attempted —
+because the same pair of widths, `(8, 16)`, is an error for `add` and completely correct
+for `cat`. The compiler cannot express that, so the error type does.
+
+The reason is in ADR-0003 and it is a good one: building a design graph is loops,
+iterators and generators. Const generics — the mechanism that would let `Bits<8>` be a
+distinct type from `Bits<16>` — make exactly that shape of code painful, because the width
+would have to be threaded through every iterator and every closure. Trading compile-time
+width checking for a graph builder that can be written as ordinary Rust loops is the right
+trade for a DSL, and it means the compiler is not doing the work people assume it is.
+</Step>
+
+<Step title="Nor does it make combinational loops impossible">
+The common claim is that Rust's borrow checker prevents combinational cycles. It does
+not. What happens is more mundane and more useful: the IR runs a topological sort over
+the dependency graph and returns a typed `CombinationalLoop` error carrying the relation
+that was violated and the nodes on the cycle, in dependency order.
+
+The reason a borrow checker cannot help here is structural. Hardcaml has the same
+problem and solves it the same way — its documentation says plainly that it cannot stop
+you creating a combinational cycle, but throws when it detects one. Detecting a cycle in
+a graph being built through interior mutability is a graph algorithm, not a borrow-check
+problem.
+</Step>
+
+<Step title="So what does Rust actually buy?">
+Four things, none of them "the compiler proves your hardware is correct":
+
+- **Memory safety without a garbage collector.** Simulation is a long-running,
+  allocation-heavy, deterministic loop. A GC introduces pauses and, more importantly,
+  non-determinism in *when* things happen — which is a poor property for a tool whose
+  entire value proposition is reproducibility. `Rc<Arena>` gives shared ownership of the
+  graph with interior mutability, and the arena is dropped deterministically.
+- **Handles that cannot outlive their graph.** A `Signal` holds an `Rc` to the arena, so
+  using a signal after its design is gone is impossible rather than merely discouraged.
+  Passing a signal to a different design is *refused* by `Design::adopt` rather than
+  silently accepted — and silent acceptance here would be the worst possible bug.
+- **`Result` on every operation, propagated with `?`.** Graph construction fails. Widths
+  mismatch, nodes are misdriven, wires are assigned twice. Because every builder operation
+  returns a `Result`, `?` makes it structurally awkward to build a design and silently
+  discard an error, and it means the error type carries the *operation* that failed.
+
+  The `Op` field is the part worth pausing on. Without it, a width mismatch between an
+  8-bit and a 16-bit value would be reported identically whether you asked for addition or
+  for concatenation — and in one case it is a bug and in the other it is the whole point.
+
+```rust
+// Every builder step can fail, and `?` makes ignoring that a deliberate act
+// rather than the default.
+let sum = design.add(&a, &b)?;      // Err(WidthMismatch { op: Op::Add, lhs: 8, rhs: 16 })
+let cat = design.cat(&a, &b, 16)?;  // fine: those widths are the point
+```
+- **No data races, if the corpus ever goes parallel.** 21 designs × 3 checks is comfortable
+  today. Making it hundreds would want parallelism, and `Send`/`Sync` make that a
+  compiler-checked property instead of a hope.
+</Step>
+
+<Step title="The real verification story is not the language at all" figure={{ value: "1 graph", unit: "two backends, one source of truth", caption: "The simulator and the emitted Verilog consume the same graph, so they cannot disagree about the design. What they can disagree about is what that design means — which is what the corpus's golden model is for." }}>
+This is the part that actually does the work, and none of it is a property of Rust.
+
+**One graph, two backends.** A cycle-based simulator and a structural Verilog emitter both
+read the same arena. There is no second description of the design that could drift from
+the first, so "does the generated Verilog implement the design I wrote" stops being a
+question and becomes a checkable invariant.
+
+**Cosimulation, compared after the edge.** ADR-0018 fixes the comparison point: after the
+clock edge, when both backends agree everything has settled, with a generated driver
+rather than a hand-written one. A hand-written driver is a second place for the bug to
+live.
+
+**A golden model, in every design.** Each of the 21 corpus designs is a real algorithm,
+and each is checked three ways: against the original Rust crate as a golden model,
+through a step testbench where every `await` is one clock edge, and against Verilator.
+
+**Skips are failures.** Verilator and Icarus are looked for rather than required, so the
+tests run without them — and both print what they skipped, so CI can fail if anything took
+the skip path. Without that rule, a green run in which every equivalence check did nothing
+is green and meaningless.
+</Step>
+
+<Step title="The honest counter-argument: OCaml was better at the one thing that matters most here">
+If you are choosing a language for an HDL today, OCaml has a real advantage that Rust does
+not have an answer to: **parametric modules and higher-order functions make hardware
+designs genuinely parameterisable at the type level.**
+
+Write a design once, instantiate it at several widths, and have the type system carry the
+width through. Hardcaml's documentation lists "highly parameterised designs" as a primary
+reason to use it, and the ecosystem leans on functors hard.
+
+Rust can approximate this with const generics — and in a fixed-width world, where a design
+is elaborated at a known width, const generics are a good fit. In this project's
+*runtime-width* world they are not available, and the honest summary is:
+
+> Rust gives better signedness modelling, memory safety and a superior testing toolchain.
+> OCaml gives better static parameterisation of designs. This project traded the second
+> for the first, plus the ability to write the graph builder as ordinary loops.
+
+Both languages are also HCLs, and the interesting problems in hardware are not language
+problems at all.
+</Step>
+
+<Step title="The ecosystem argument, which is real but should be stated last">
+Everything in one toolchain: `cargo test` runs the unit tests, the integration tests, the
+doctests, and the corpus. `proptest` gives property-based testing with shrinking.
+Verilator and Icarus are invoked from the same test run. Clippy and `rustfmt` are not
+optional extras. Dependabot-style auditing runs over a manifest with `cargo deny`.
+
+None of this is a language feature. It is the difference between an HDL ecosystem where
+simulation, formal checking and linting are separate tools with separate build systems,
+and one where `cargo test` is the whole verification story. For a project whose claim is
+"the corpus keeps finding bugs the tools' own tests could not", having the corpus run by
+default in the same command as everything else is the feature that makes the claim
+sustainable.
+</Step>
+
+</Steps>
+
+<Compare
+  head={["", "OCaml (Hardcaml)", "Rust (this project)"]}
+  rows={[
+    ["Signedness", "operator suffix; agnostic operators exist", "i32 vs u32 in the type"],
+    ["Width checking", "runtime, with explicit rules per operator", "runtime, typed error naming the op"],
+    ["Design parameterisation", "functors, higher-order functions", "ordinary generics + runtime width"],
+    ["Combinational cycle", "detected at simulation time", "topological sort, typed CombinationalLoop"],
+    ["Port lists", "ppx_hardcaml from a record", "#[derive(PortList)] from a struct"],
+    ["Simulator", "Cyclesim, cycle-based", "cycle-based, compiled to an enum Op"],
+    ["Memory / ROM", "memory, multiport_memory, RAM inference", "none: a mux tree or a case"],
+    ["Property testing", "QuickCheck", "proptest"],
+    ["Equivalence check", "not part of the flow", "every corpus design, 3 ways"],
+    ["GC", "yes", "no — deterministic drop"],
+  ]}
+/>

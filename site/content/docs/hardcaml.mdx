@@ -1,0 +1,161 @@
+---
+title: Hardcaml, the design being ported
+description: Signal.t, registers, Reg_spec, wires and feedback, Cyclesim, ppx interfaces, RAM — and the three checks this project inherited verbatim.
+---
+
+Hardcaml is the OCaml library this project's architecture comes from. This page
+describes it concretely, because most of the crate boundaries here map onto something in
+Hardcaml and a few of them deliberately do not.
+
+<Steps>
+
+<Step title="Signal.t and a deliberately unsigned core">
+The central type is `Signal.t`, and the combinators are what you would guess:
+`map`, `map2`, `mux`, `mux2`, `cases`, `#` for selecting a bit range, `concat_msb` and
+`concat_lsb`, `split_lsb` and `split_msb`, shifts, `resize`, `reduce`, `popcount`,
+`leading_zeros`, one-hot and Gray conversions.
+
+The width rules are explicit and they are the part worth internalising, because they are
+what makes an HDL's type system worth anything:
+
+- Binary operations need **both arguments the same width**, and return that width.
+- Multiplication accepts **arbitrary widths** and returns the sum of them.
+- Comparison returns **one bit**.
+- Mux select is one bit, and the two data inputs must be the same width.
+- Selecting bits outside the range of a value raises.
+
+And signedness is **not** in the type: the operator suffix says how to interpret the
+operands. This project keeps the width discipline and drops the suffix approach, because
+Rust's `i32`/`u32` split already carries signedness in the type where it belongs.
+</Step>
+
+<Step title="Reg_spec: clock, clear and reset in one value" figure={{ value: "reg", unit: "one cycle of delay", caption: "Reg_spec.t encodes the clock, the synchronous clear and the asynchronous reset. A register is then declared against that spec, with an optional enable." }}>
+Sequential elements are declared against a `Reg_spec.t`, which groups the clock and its
+reset/clear together so that every register in a design is on a known clock domain:
+
+```ocaml
+let spec = Signal.Reg_spec.create clock clear
+let q    = Signal.reg spec ~enable:Signal.vdd d_in
+let q3   = Signal.pipeline spec ~enable:Signal.vdd ~n:3 d_in
+```
+
+`reg` delays by one cycle; `pipeline ~n` delays by `n`. This project has the same two
+operations, and the same reason for having the second one: a design with a long
+combinational path is a design that will not meet timing, and being able to state the
+latency explicitly is what makes that visible before synthesis rather than after.
+</Step>
+
+<Step title="Wire and reg_fb: how feedback is expressed" figure={{ value: "cycle", unit: "must pass through a register", caption: "Hardcaml cannot stop you creating a combinational cycle, but it throws when it detects one. Feedback is legal only through a sequential element." }}>
+A combinational cycle is illegal: the output would depend on its own input with no delay
+in the path, and in silicon that oscillates. But feedback through a register is how every
+counter and state machine is built, and a language that forbids cycles in the graph cannot
+express that.
+
+Hardcaml's answer is `Signal.wire`. A wire is a signal that can be declared before its
+driver is known; you later assign the driver. That is enough to write a counter, because
+the wire lets `d` be referred to while `d`'s driver (`reg_fb`, a register reading `q`)
+is still being defined.
+
+There is a documented cost, and this project keeps it: Hardcaml detects an unassigned
+wire, but the error is not especially helpful at finding *where* the wire was declared,
+unless you enable extra debug tracking.
+
+`Design::rom` here takes the same shape, and the corpus documents that this is the
+pattern for any feedback path.
+</Step>
+
+<Step title="Cyclesim: the cycle abstraction is not incidental">
+Hardcaml's simulation backend is called **Cyclesim**, and the name states the central
+decision: the unit of simulation is a cycle, not a gate event. You present inputs for a
+cycle, the design settles, and you read outputs. Waveforms and an interactive viewer are
+built on top of that.
+
+This is why equivalence checking is tractable at all. Two backends can only be compared
+meaningfully if you know they are at the same instant, and a cycle boundary gives you
+that for free. A gate-level event simulator gives you a *sequence* of events, and two
+correct implementations may legitimately produce different sequences.
+
+Hardcaml also ships a faster backend that compiles designs to C, trading compile time for
+run time. This project has no equivalent — the corpus is small enough that the enum-of-ops
+interpreter is fast enough — but it is the obvious lever if it were not.
+</Step>
+
+<Step title="Interfaces: a module's ports are a record" figure={{ value: "record", unit: "not a list of strings", caption: "ppx_hardcaml reads a record declaration and generates the interface plumbing, so names and widths live in exactly one place." }}>
+A module interface in Hardcaml is a record whose fields are signals, generated by
+`ppx_hardcaml`. There are parallel modules for manipulating an interface at signal level
+and at simulator level, plus combinators across a whole interface: `mux`, `reg`,
+`pipeline`, `inputs` and `outputs`.
+
+This is the closest thing in Hardcaml to what `#[derive(PortList)]` does here, and the
+argument is the same one: **a width that appears in one place and not the other is a bug
+that compiles.** A macro taking `("clk", 1), ("rst", 1), ("count", 16)` and a struct
+declaring those same ports are the same design, and only one of them cannot drift.
+</Step>
+
+<Step title="Memory is a first-class primitive, and here it is not" figure={{ value: "0", unit: "initialised-memory nodes in this IR", caption: "Hardcaml has memory and multiport_memory with FPGA block-RAM inference. This project has none, so every table is a mux tree or a case statement." }}>
+This is the largest functional gap between the two, and it is worth stating as a gap
+rather than a design choice.
+
+Hardcaml provides a core memory primitive — synchronously written, asynchronously read,
+one write port per clock — plus `multiport_memory`, which targets the physical block RAM
+in an FPGA. The multiport version works by instantiating a memory and a register on the
+read address or the output data, so the read becomes synchronous and returns one cycle
+later. It relies on a feature of FPGA synthesis tools called *RTL RAM inference*, and
+Hardcaml's own documentation calls that process "notoriously finicky" and tells you to
+read the tool reports.
+
+This project has no initialised-memory node in the IR. `Design::rom(address, &table,
+width)` emits exactly what a human would write with `case`: one arm per entry. That is
+honest and it simulates correctly, and it is *wrong* for a 256-entry alphabet map. The
+landing page says so; this is that sentence.
+</Step>
+
+<Step title="The three checks inherited verbatim" figure={{ value: "3", unit: "checks, lifted from kernel/signal.ml:242-267", caption: "A node that is not a wire cannot be assigned; a wire cannot be assigned twice; a wire's driver must match its width. The third exists here and not upstream because arena construction is separated from driving." }}>
+The IR's error documentation is explicit that two of its checks come from Hardcaml's
+`kernel/signal.ml:242-267`, which performs the same three checks on assignment for the
+same reasons:
+
+1. A node that is not a wire cannot be assigned.
+2. A wire cannot be assigned twice.
+3. A wire's driver must match its width.
+
+The third check exists in this project and not upstream, and the reason is the structural
+difference: arena construction is separated from driving, so a mismatched driver is
+detectable here in a way it is not there.
+
+Inheriting checks rather than reinventing them is the cheapest form of verification
+available — these are error paths that already have battle-tested implementations and
+documented rationale behind them.
+</Step>
+
+<Step title="What this project adds that Hardcaml has no equivalent for">
+Hardcaml's pipeline is: build a design, simulate it, emit Verilog or VHDL, and trust that
+the two agree. This project adds a third consumer and makes disagreement a build failure:
+
+- **A generated cosimulation driver** compared **after the clock edge** (ADR-0018), so the
+  comparison happens at the instant both backends agree is settled.
+- **A golden model in the corpus**: every one of the 21 designs is checked against the
+  original Rust crate it reimplements, as well as through a step testbench and against
+  Verilator.
+- **A CI rule that a green run with skips is a failure.** Verilator and Icarus are looked
+  for rather than required, so `cargo test` works without them — and both print what they
+  skipped, so CI can fail if anything took the skip path.
+
+That third bullet is the one that matters most in practice, and it is pure process: an
+equivalence check that silently does nothing looks exactly like one that passed.
+</Step>
+
+</Steps>
+
+<ul className="notes">
+  <Note kind="measured" title="Where the nine crates come from">
+    bits, ir, design, sim, rtl, derive, wave, cosim, tb — nine tools plus one corpus.
+    The crate boundaries follow Hardcaml's module boundaries where Hardcaml has one, and
+    split where it does not.
+  </Note>
+  <Note kind="trap" title="Do not read Hardcaml's combinator names as semantics">
+    The names are suggestive but the width rules are what is binding. `mux` looking like
+    a ternary, or `cases` looking like a match, does not mean they accept the shapes a
+    `match` or a ternary accepts in OCaml.
+  </Note>
+</ul>

@@ -1,0 +1,155 @@
+---
+title: How a circuit becomes a value
+description: Combinational and sequential logic, why combinational logic must be acyclic, what a clock edge actually is, and what a cycle means to a simulator.
+---
+
+Hardware is easy to describe badly and hard to describe precisely. The vocabulary below is
+the part that has to be exact before the rest of this documentation means anything —
+every one of the nine crates exists to make one of these ideas expressible rather than
+implicit.
+
+<Steps>
+
+<Step title="A wire is a value that is always there" figure={{ value: "1 bit", unit: "or a vector of them", caption: "A signal's width is part of its identity. Two 8-bit values and one 16-bit value are different signals, and an operation that mixes them is an error rather than a widening." }}>
+In software, a variable has a value and you find out what it is by running the code. In
+hardware, **every wire has a value at every instant**, whether or not anybody is looking.
+There is no "unassigned". A wire is a number of a fixed width, present continuously.
+
+That is why this project tracks width on every signal rather than inferring it later: the
+width is not a property of the expression that produced the value, it is a property of the
+wire, and two operations can disagree about whether `(8, 16)` is legal. Addition wants
+equal widths. Concatenation wants a sum. The error has to name which operation was
+attempted, or the same pair of widths is either a bug or completely fine depending on
+context.
+</Step>
+
+<Step title="Combinational logic cannot contain a cycle">
+**Combinational** logic is a function of its inputs, evaluated continuously. `a + b` is
+combinational. `a & ~a` is combinational. A mux is combinational.
+
+The rule: a combinational cycle is not allowed, and it is not a style preference. If the
+output of a gate depends on its own input with no delay anywhere in the loop, then in real
+silicon the gate's output feeds back into its own input before it has settled, and the
+circuit oscillates or resolves to an arbitrary value. There is no correct answer to
+compute. A ring of odd inverters on a real board is an oscillator, not a circuit.
+
+This is why the IR runs a topological sort and reports a typed `CombinationalLoop` error
+naming the relation violated and the nodes on the cycle. It cannot be left to a human to
+notice: `reg_fb`-style feedback is legitimate hardware, and the only thing that
+distinguishes a legal register loop from an illegal wire loop is *whether a sequential
+element sits in the path*.
+</Step>
+
+<Step title="A register is where a cycle is allowed" figure={{ value: "1 edge", unit: "the only place state changes", caption: "Inside a cycle, values settle. At the rising edge, every register simultaneously takes the value its input had just before the edge." }}>
+**Sequential** logic has memory. A register samples its input and holds it until the next
+active clock edge. That single element is what makes a loop legal: state can depend on
+itself, because the dependency is broken by a delay of one whole cycle.
+
+The subtlety beginners trip over first: everything combinational in a design settles
+*within* a cycle, and every register updates *at the edge*. So a register's output cannot
+feed its own input combinationally in the same cycle — that is exactly the combinational
+loop above. Feedback has to go through the register, which is why counter designs in this
+corpus are all written in the same shape: build the next value from the current one,
+declare the register, then patch the wire so the feedback path closes through it.
+
+That second line is the whole of the cycle checking. It is a topological sort over the
+dependency graph, run under a *stated relation* — and that is what makes a legal register
+loop distinguishable from an illegal wire loop: a register breaks the ordering under the
+combinational relation while preserving it under the sequential one.
+
+```rust
+// Four signals, four widths, checked at run time. Reset and clear are separate
+// arguments because they are separate in the IR: one is asynchronous, one is not.
+let state: Signal = design.reg(&next, &clock, &reset, &clear)?;
+
+// Ordered before either backend sees the graph. This is the call that turns a
+// combinational loop into a typed error instead of an oscillation in silicon.
+let order = design.circuit().topological_order(Deps::Combinational)?;
+```
+</Step>
+
+<Step title={"What ‘one cycle’ means is a choice, and this project made one"}>
+A simulator has to decide when to evaluate what. The two defensible options:
+
+- **Event-driven.** Evaluate each gate as its inputs change. Precise, and the only way to
+  model races and gate-level delay. Hard to compare between two backends.
+- **Cycle-based.** Freeze all state, evaluate the whole combinational cone, then advance
+  the clock once. Every gate in the design sees the same starting values.
+
+This project is cycle-based, because equivalence checking is the point and equivalence is
+only meaningful if both backends are guaranteed to have been at the same instant. The
+consequence worth knowing: **combinational logic in this simulator is not evaluated
+incrementally.** You will not observe a partial settle. If you are porting intuition from
+a gate-level simulator, that difference will mislead you once.
+</Step>
+
+<Step title="Bit order is a wire format, not a detail" figure={{ value: "LSB first", unit: "RFC 1951, DEFLATE", caption: "Data elements are packed starting with the least-significant bit of the first byte, then bit 1, up to bit 7, then the next byte. A design that peels bits off the top produces a plausible stream no decoder has ever accepted." }}>
+The single most common hardware bug in this corpus is a constant or a bit order that looks
+right and means the opposite.
+
+A byte has eight bits and there are two plausible orders to send them. Most CPU code and
+most network formats send the most-significant bit first. DEFLATE does not: RFC 1951
+specifies that data elements are packed starting with the least-significant bit of each
+byte. Get this backwards and every byte is reversed — a stream that is wrong in a way
+that still has the right length, so it passes every length check you write.
+
+This is why the corpus checks bit-exactness against the *original* crate rather than
+against a hand-written expectation. A hand-written expectation is written by the same
+person who got the order wrong.
+</Step>
+
+<Step title="Simulation and synthesis are different questions">
+Simulation asks: *given these inputs, what does this graph evaluate to?* Synthesis asks:
+*given this source, what should I build?*
+
+They are not the same program, and a design can pass one and fail the other. The classic
+case is an initialised memory: this project's `Design::rom` has no initialised-memory node
+in the IR, so it emits one arm per entry as a `case`. That is honest about what it is —
+a multiplexer tree — and it simulates correctly. A synthesis tool looking at the same
+source would infer a block RAM, which is a completely different physical thing with
+different timing. The documentation records that rather than hiding it, because "it
+simulates" and "it will become a RAM" are different claims.
+</Step>
+
+<Step title="What equivalence checking proves, and what it does not">
+When the simulator and the emitted Verilog are compared cycle by cycle over a stimulus,
+you have proven something specific: **on this stimulus, these two backends agree.**
+
+That is genuinely valuable and it is more than most hardware projects check. It is not a
+proof, and the limits are worth stating plainly:
+
+- It says nothing about inputs the stimulus never produced.
+- It cannot see a difference that both backends share. Every tool in the chain agreeing on
+  a wrong answer is the single most expensive failure mode in hardware — and it happened
+  here: 471 tests across nine crates all agreed that `Design::sll` and `Design::srl` were
+  swapped. Every crate was wrong in the same direction, so no amount of cross-checking
+  *between those crates* would have caught it. Only an external golden model did.
+- It needs a third party. The golden model is why the corpus checks against the original
+  crate rather than against itself.
+
+So the argument is not "equivalence checking makes this correct". It is: equivalence
+checking makes two independent readings of one graph agree, and a golden model makes that
+agreement mean something.
+</Step>
+
+</Steps>
+
+<ul className="gotchas">
+  <Gotcha title="Zero-width is not the same as one-bit">
+    A vector of width 0 is a real value in this system, and it is not a one-bit vector
+    holding 0. Concatenating a zero-width vector changes nothing; concatenating a one-bit
+    vector holding 0 does. The distinction matters as soon as you are splitting and
+    reassembling.
+  </Gotcha>
+  <Gotcha title="A register's output is the previous cycle's input">
+    Not "the current input". At the rising edge the register captures what its input was
+    *just before* the edge. Any combinational path from a register back to itself within
+    one cycle is a combinational loop, and the simulator will say so rather than
+    producing a plausible wrong answer.
+  </Gotcha>
+  <Gotcha title="Simulator parallelism is not free correctness">
+    Because the simulator is cycle-based, designs are evaluated with fixed combinational
+    layering. A design that depends on evaluation order to produce a particular answer is
+    relying on an implementation detail of the simulator rather than on the graph.
+  </Gotcha>
+</ul>
