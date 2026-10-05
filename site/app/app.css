@@ -1416,7 +1416,9 @@ table.compare thead th {
   font-weight: 500;
   color: var(--ink-soft);
   border-block-end-color: var(--rule-strong);
-  white-space: nowrap;
+  /* Not nowrap: a benchmark table has six numeric columns and a nowrap header wraps into
+     a taller, ragged band. Row headers keep nowrap because a design name should never
+     break across lines. */
 }
 
 table.compare tbody th {
@@ -1424,7 +1426,14 @@ table.compare tbody th {
   font-weight: 500;
   color: var(--ink);
   white-space: nowrap;
-  width: 1%;
+}
+
+/* A numeric column is right-aligned, so digits line up down the table and a magnitude is
+   readable without reading the number. Left-aligned decimals are genuinely hard to scan. */
+table.compare td:not(:first-child):not(:last-child) {
+  text-align: right;
+  font-family: var(--face-data);
+  font-variant-numeric: tabular-nums;
 }
 
 table.compare td {
@@ -1577,5 +1586,139 @@ table.compare td:last-child {
   .walk__step {
     min-height: 0;
     padding-block: var(--s-4);
+  }
+}
+
+/* Log-scaled bars. A linear scale would render the CPU row as a rounding error, which is
+   true but reads as a broken chart rather than as the point. */
+.bar-chart--log .bar__value {
+  font-size: var(--t-micro);
+}
+
+.bar-chart--log .callout__foot {
+  grid-column: 1 / -1;
+  margin-block-start: var(--s-2);
+}
+
+/* ==========================================================================
+   The persistent header.
+   --------------------------------------------------------------------------
+   In the root layout, so it is on every route including the error boundary. That is the
+   whole point of it: the answer to "how do I get back to something?" cannot depend on
+   which page you landed on.
+   ========================================================================== */
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 10;
+  background: var(--signal);
+  color: var(--paper);
+  padding: 0.6rem 1rem;
+  font-size: var(--t-small);
+}
+
+.skip:focus {
+  left: var(--s-3);
+  top: var(--s-3);
+}
+
+.sitebar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  /* Translucent over the dot grid rather than opaque, so the grid shows through and the
+     bar reads as part of the page rather than a separate chrome layer. */
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-block-end: 1px solid var(--rule);
+}
+
+.sitebar__inner {
+  display: flex;
+  align-items: center;
+  gap: var(--s-5);
+  max-width: 90rem;
+  margin-inline: auto;
+  padding: 0.6rem var(--gutter);
+}
+
+.sitebar__wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--face-data);
+  font-size: var(--t-small);
+  color: var(--ink);
+  text-decoration: none;
+  flex: none;
+}
+
+/* The same filled square the hero eyebrow uses, so the wordmark and the headline read as
+   one identity rather than two. */
+.sitebar__mark {
+  width: 0.5rem;
+  height: 0.5rem;
+  background: var(--signal);
+  flex: none;
+}
+
+.sitebar__nav {
+  display: flex;
+  gap: var(--s-4);
+  margin-inline-start: var(--s-4);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.sitebar__link {
+  font-size: var(--t-small);
+  color: var(--ink-soft);
+  text-decoration: none;
+  padding-block-end: 1px;
+  border-block-end: 1px solid transparent;
+  transition: color var(--d-fast) var(--ease), border-color var(--d-fast) var(--ease);
+}
+
+.sitebar__link:hover {
+  color: var(--ink);
+}
+
+.sitebar__link.is-current {
+  color: var(--signal);
+  border-block-end-color: currentColor;
+}
+
+.sitebar__meta {
+  margin-inline-start: auto;
+  font-family: var(--face-data);
+  font-size: var(--t-micro);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+@media (max-width: 52rem) {
+  .sitebar__meta {
+    display: none;
+  }
+  .sitebar__inner {
+    gap: var(--s-4);
+  }
+  .sitebar__nav {
+    margin-inline-start: auto;
+    gap: var(--s-3);
+  }
+}
+
+/* The docs layout and the walk section both assumed they owned the full viewport height
+   from the top of the page. With a sticky header there is real estate to account for. */
+.doc-layout {
+  padding-block-start: var(--s-4);
+}
+
+@media (max-width: 52rem) {
+  .sitebar__nav .sitebar__link {
+    font-size: var(--t-micro);
   }
 }

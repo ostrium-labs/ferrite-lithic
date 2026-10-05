@@ -27,6 +27,7 @@ import Basics from "../../content/docs/basics.mdx";
 import Ocam from "../../content/docs/ocaml.mdx";
 import HardcamlPage from "../../content/docs/hardcaml.mdx";
 import WhyRust from "../../content/docs/why-rust.mdx";
+import Benchmarks from "../../content/docs/benchmarks.mdx";
 
 export interface DocEntry {
   /** The URL segment, and the key into the registry. */
@@ -112,6 +113,15 @@ export const DOCS: DocEntry[] = [
   fromData(TOOLCHAIN[8], 180), // tb
   fromData(CORPUS, 200),
   fromData(FINDINGS, 210),
+  // Reference, read last: it measures the corpus rather than explaining it.
+  {
+    slug: "benchmarks",
+    title: "Benchmarks, measured",
+    description: "Node counts, flops, bits of state and combinational depth for every design, derived from the IR rather than estimated.",
+    order: 220,
+    kind: "mdx" as const,
+    Component: Benchmarks,
+  },
 ].sort((a, b) => a.order - b.order);
 
 export const BY_SLUG = new Map(DOCS.map((entry) => [entry.slug, entry]));

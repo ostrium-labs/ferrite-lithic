@@ -5,8 +5,10 @@ import {
   Scripts,
   ScrollRestoration,
   isRouteErrorResponse,
+  useLocation,
 } from "react-router";
 
+import { SiteHeader } from "./components/SiteHeader";
 import "./app.css";
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -27,6 +29,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
+        <a className="skip" href="#main">
+          Skip to content
+        </a>
         {children}
         <ScrollRestoration />
         <Scripts />
@@ -36,7 +41,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  return <Outlet />;
+  const { pathname } = useLocation();
+  return (
+    <>
+      <SiteHeader pathname={pathname} />
+      <div id="main">
+        <Outlet />
+      </div>
+    </>
+  );
 }
 
 export function ErrorBoundary({ error }: { error: unknown }) {

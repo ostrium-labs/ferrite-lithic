@@ -396,19 +396,29 @@ design.emit_verilog("top");              // structural`}
           </div>
 
           <div className="callout callout--loss">
-            <h3>The honest benchmark: memchr loses by 4843×</h3>
+            <h3>The honest benchmark: the CPU wins memchr, by 4.2×</h3>
             <p>
-              Measured, not assumed. The automaton design is a real design and it is{" "}
-              <em>still</em> 4843× slower than the CPU, because a single-byte search is
-              what SIMD was built for:
+              The automaton design is a real design, and it still loses. Measured per byte
+              against the <code>memchr</code> crate at an assumed 1&nbsp;GHz: the design
+              retires <strong>one byte per clock edge</strong>, the crate retires{" "}
+              <strong>32 bytes per AVX2 instruction</strong>. That is the entire gap, and
+              the argument for hardware is not that it wins here.
             </p>
             <Bars />
             <p className="callout__foot">
+              Across the corpus, two of five designs beat their reference implementation:{" "}
+              <code>crc3</code> by 2.2× and <code>hex</code> by 1.4×. Both win by{" "}
+              <em>doing less</em> — a three-bit state and a lookup table have no generality
+              to pay for. The ones that lose lose because the CPU has more parallelism
+              available than a 31-node circuit uses.{" "}
+              <Link to="/docs/benchmarks">Why hardware loses here, and when it wins →</Link>
+            </p>
+            <p>
               It is in the corpus anyway, because it is the baseline the other two automata
               are measured against, and because a design that claimed to beat AVX2 at
               single-byte search would have been dishonest. The surviving argument for the
               tier is the <em>multi-pattern</em> search, where no SIMD form exists and a
-              5–19 state automaton shares one ROM across lanes.
+              19-state automaton shares one ROM across lanes.
             </p>
           </div>
         </section>
@@ -532,7 +542,7 @@ design.emit_verilog("top");              // structural`}
           corpus that keeps finding bugs the tools' own tests could not.
         </p>
         <p className="footer__meta">
-          810 tests, 21 designs, 7 tiers, 10 crates. MIT-licensed dependencies audited with{" "}
+          811 tests, 21 designs, 7 tiers, 10 crates. MIT-licensed dependencies audited with{" "}
           <code>cargo deny</code>.
         </p>
       </footer>
@@ -540,7 +550,13 @@ design.emit_verilog("top");              // structural`}
   );
 }
 
-/** Bars grow from zero once on reveal, because a 4843× ratio is only legible as a ratio. */
+/**
+ * The benchmark bars.
+ *
+ * Three rows, because the story is three rows: the two simulator timings that used to be
+ * mistaken for hardware figures, and the real one. Log-scaled, since on a linear scale the
+ * good rows are rounding errors — which is true, but reads as a broken chart.
+ */
 function Bars() {
   const [shown, setShown] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -562,18 +578,26 @@ function Bars() {
     return () => observer.disconnect();
   }, []);
 
+  const row = (label: string, value: string, width: number, loss?: boolean) => (
+    <div className={`bar${loss ? " bar--loss" : ""}`}>
+      <span className="bar__label">{label}</span>
+      <span className="bar__fill" style={{ width: shown ? `${width}%` : "0%" }} />
+      <span className="bar__value">{value}</span>
+    </div>
+  );
+
   return (
-    <div className="bar-chart" ref={ref}>
-      <div className="bar bar--loss">
-        <span className="bar__label">the design</span>
-        <span className="bar__fill" style={{ width: shown ? "100%" : "0%" }} />
-        <span className="bar__value">2540 ns/byte</span>
-      </div>
-      <div className="bar bar--win">
-        <span className="bar__label">the crate</span>
-        <span className="bar__fill" style={{ width: shown ? "0.02%" : "0%" }} />
-        <span className="bar__value">0.52 ns/byte</span>
-      </div>
+    <div className="bar-chart bar-chart--log" ref={ref}>
+      {row("crc3 design", "1.00 cyc/byte", 44)}
+      {row("crc crate", "2.24 ns/byte", 100, false)}
+      {row("memchr design", "1.01 cyc/byte", 45)}
+      {row("memchr crate", "0.24 ns/byte", 11)}
+      <p className="callout__foot">
+        One design that beats its reference implementation and one that does not, in the
+        units a ratio needs: clock edges against wall clock, read at a stated 1&nbsp;GHz.
+        The bottom row is the software being <em>beaten</em> — a general-purpose CRC
+        library paying for a three-bit result.
+      </p>
     </div>
   );
 }

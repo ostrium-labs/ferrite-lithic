@@ -5,7 +5,7 @@ const BASE = "http://localhost:5173";
 
 const ROUTES = [
   "/", "/docs",
-  "/docs/basics", "/docs/ocaml", "/docs/hardcaml", "/docs/why-rust",
+  "/docs/basics", "/docs/ocaml", "/docs/hardcaml", "/docs/why-rust", "/docs/benchmarks",
   "/docs/bits", "/docs/ir", "/docs/design", "/docs/sim", "/docs/rtl",
   "/docs/derive", "/docs/wave", "/docs/cosim", "/docs/tb",
   "/docs/corpus", "/docs/findings",
@@ -37,28 +37,39 @@ for (const route of ROUTES) {
     tables: document.querySelectorAll("table.compare").length,
     next: document.querySelector(".doc-footer__link--next")?.getAttribute("href") ?? "",
     cards: document.querySelectorAll(".index-card").length,
+    barLinks: document.querySelectorAll(".sitebar__link").length,
+    barCurrent: document.querySelectorAll(".sitebar__link.is-current").length,
   }));
 
   const problems = [];
   if (response.status() !== 200) problems.push(`status ${response.status()}`);
   if (errors.length) problems.push(`console: ${errors.slice(0, 2).join(" | ")}`);
   if (!info.h1) problems.push("no <h1>");
-  if (route.startsWith("/docs/") && route !== "/docs") {
-    if (info.sidebar !== 15) problems.push(`sidebar ${info.sidebar}, want 15`);
-    if (!info.current) problems.push("no current item");
-    if (!info.next && route !== "/docs/findings") problems.push("no next link");
+  if (info.barLinks < 5) problems.push(`header has ${info.barLinks} links, want 5`);
+  // /docs is the hub of all four sections, so the bar deliberately highlights none of
+  // them there. Every other route must mark exactly one.
+  if (route === "/docs") {
+    if (info.barCurrent !== 0) problems.push(`the hub highlighted ${info.barCurrent} sections`);
+  } else if (info.barCurrent !== 1) {
+    problems.push(`header marks ${info.barCurrent} sections, want exactly 1`);
   }
-  if (route === "/docs" && info.cards !== 15) problems.push(`${info.cards} cards, want 15`);
-  if (["/docs/basics", "/docs/ocaml", "/docs/hardcaml", "/docs/why-rust"].includes(route)) {
+  if (route.startsWith("/docs/") && route !== "/docs") {
+    if (info.sidebar !== 16) problems.push(`sidebar ${info.sidebar}, want 16`);
+    if (!info.current) problems.push("no current item");
+    if (!info.next && !["/docs/findings", "/docs/benchmarks"].includes(route)) problems.push("no next link");
+  }
+  if (route === "/docs" && info.cards !== 16) problems.push(`${info.cards} cards, want 16`);
+  if (["/docs/basics", "/docs/ocaml", "/docs/hardcaml", "/docs/why-rust", "/docs/benchmarks"].includes(route)) {
     if (info.shiki === 0) problems.push("no highlighted code — MDX/Shiki did not run");
-    if (info.steps < 5) problems.push(`only ${info.steps} steps`);
+    // `benchmarks` is a reference page, not a numbered walkthrough, so no steps is right.
+    if (info.steps < 5 && route !== "/docs/benchmarks") problems.push(`only ${info.steps} steps`);
   }
 
   if (problems.length) failures += 1;
   console.log(
     `${problems.length ? "FAIL" : "ok  "} ${route.padEnd(18)} steps=${String(info.steps).padStart(2)} ` +
     `shiki=${String(info.shiki).padStart(4)} pre=${String(info.pre).padStart(2)} ` +
-    `fig=${info.figures} notes=${info.notes} table=${info.tables} side=${info.sidebar}`,
+    `fig=${info.figures} notes=${info.notes} table=${info.tables} side=${info.sidebar} bar=${info.barCurrent}`,
     problems.length ? `\n     -> ${problems.join("; ")}` : "",
   );
   await page.close();
@@ -77,7 +88,7 @@ for (let i = 0; i < 20; i += 1) {
   seen.push(href.replace("/docs/", ""));
 }
 console.log(`\nchain (${seen.length}): ${seen.join(" -> ")}`);
-if (seen.length !== 15) { failures += 1; console.log(`FAIL chain length ${seen.length}, want 15`); }
+if (seen.length !== 16) { failures += 1; console.log(`FAIL chain length ${seen.length}, want 16`); }
 
 // Canvas behaviour. Two different contracts, so two different assertions:
 //   the hero draws once and then HOLDS (a looping hero competes with the text below it),

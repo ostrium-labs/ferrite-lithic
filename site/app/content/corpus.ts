@@ -40,8 +40,8 @@ export const CORPUS: Page = {
     {
       title: "Tier 4 — automata",
       detail:
-        "One state register, one transition table, one byte per edge. This tier contains the project's most useful negative result: `memchr` is a real design and it still loses to the CPU by a measured 4843×, because single-byte search is what SIMD was built for. It is in the corpus anyway, as the baseline the other two are measured against.",
-      figure: { value: "4843", unit: "× slower", caption: "memchr: 2540 ns/byte against 0.52 ns/byte. Measured, not assumed." },
+        "One state register, one transition table, one byte per edge. This tier contains the project's most useful negative result: `memchr` is a real design and it still loses to the CPU — by 4.2×, measured per byte at an assumed 1 GHz. The design does one byte per clock edge; the crate does 32 bytes per AVX2 instruction. It is in the corpus anyway, as the baseline the other two are measured against, and because 31 nodes against a CPU core is not a close comparison either way.",
+      figure: { value: "1 vs 32", unit: "bytes per edge vs per AVX2 instruction", caption: "The structural comparison. The wall-clock ratio is measured at run time and printed, but it varies by build profile and host — see benchmarks." },
     },
     {
       title: "Tier 5 — data infrastructure",
@@ -78,8 +78,8 @@ export const CORPUS: Page = {
   notes: [
     {
       kind: "measured",
-      title: "4843× is a measurement",
-      body: "2540 ns/byte for the automaton against 0.52 ns/byte for the crate. The honest benchmark is in the corpus precisely because it is a loss.",
+      title: "An earlier revision of this page quoted a number it should not have",
+      body: "It computes the ratio at run time and prints it without asserting it, because the figure depends on host load, build profile and clock rather than on the design. What it times is the **software simulator**: an interpreter stepping one node per cycle costs far more wall time than the single clock edge it models, so the number is a debugging signal and not a hardware result. `tests/speed.rs` exists to replace it, comparing the design's actual clock edges against the crate and quoting the frequency it assumed. The corpus keeps the loss because it is a loss — and the loss is structural, not an artefact of any ratio.",
     },
     {
       kind: "decision",
@@ -183,7 +183,7 @@ if len as u32 != (!nlen as u32 & 0xffff) { return None; }`,
   notes: [
     {
       kind: "measured",
-      title: "810 tests, and the corpus still found the bugs",
+      title: "811 tests, and the corpus still found the bugs",
       body: "The tool crates' own tests are not bad; they were aimed at the wrong things. The change that found the last nine defects was not more tests. It was writing a design that has an answer somewhere outside this repository.",
     },
     {
