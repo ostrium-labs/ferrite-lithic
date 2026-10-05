@@ -64,6 +64,7 @@ pub mod packet;
 pub mod rle;
 pub mod roaring;
 pub mod sha256;
+pub mod sketch;
 pub mod sorting;
 
 use std::fmt;
