@@ -115,7 +115,12 @@
 //!   Real decoders solve that with a two-level table (a [`TABLE_BITS`]-entry root plus a
 //!   sub-table for the codes that overflow it), which is why [`TABLE_BITS`] is a constant
 //!   and not a parameter.
-//! * **No multi-symbol-per-cycle decode.** One symbol per cycle, which is the point.
+//! * **No multi-symbol-per-cycle decode.** One symbol per cycle at best, and one per
+//!   `code_len` cycles in practice: a decode spends `code_len` bits and the host supplies
+//!   one bit per cycle, so the rate is one symbol per code length. That is one per cycle
+//!   only for the single-symbol one-bit code of [`Table::single`]. DEFLATE's shortest
+//!   fixed code is seven bits. Contrast [`crate::fse`], whose transitions can cost *no*
+//!   bits, which is what makes its one-per-cycle claim real and this one not.
 //! * **No error flag for a malformed stream.** An index the table marks with length zero
 //!   stalls the decoder with [`Outputs::out_valid`] low and [`Outputs::held`] pinned at
 //!   [`BUFFER_BITS`], which a host can detect as a stall. It does not raise a signal.
@@ -356,10 +361,13 @@ impl Table {
     /// Never.
     pub fn canonical(lengths: &[u8]) -> Result<Self, CodeError> {
         let codes = canonical_codes(lengths)?;
-        if let Some(longest) = codes.iter().map(|word| word.length).max() {
-            if u32::from(longest) > TABLE_BITS {
-                return Err(CodeError::TooDeep { length: longest });
-            }
+        if let Some(longest) = codes
+            .iter()
+            .map(|word| word.length)
+            .filter(|length| u32::from(*length) > TABLE_BITS)
+            .max()
+        {
+            return Err(CodeError::TooDeep { length: longest });
         }
         let mut entries = vec![(0u16, 0u8); TABLE_ENTRIES];
         for word in &codes {

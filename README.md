@@ -10,9 +10,15 @@ Status
 ------
 
 **Phases A1 through A3 are implemented and tested.** That is every crate in the
-layout table below, plus `ferrite-lithic-corpus` — a set of verified designs
-written the way hardware would want them, which exist to check the *toolchain*
-rather than to exercise a feature.
+layout table below, all nine of them green on their own: the bits crate, the IR,
+the front end, the simulator, the emitter, the derive macro, the waveform data,
+the cosimulator and the step testbench.
+
+**The whole tree is green, and the corpus is what made it that way.**
+Twenty-one designs across seven tiers, each differentially tested against the crate
+that defines it, driven through the step testbench, and cosimulated against Verilator.
+What finishing the last of them cost is written down under
+[What finishing the entropy tier cost](#what-finishing-the-entropy-tier-cost).
 
 Verilator and Icarus are looked for rather than required, so `cargo test` works
 without them; both **print what they skipped**. There is a CI job, `cosim`, that
@@ -21,15 +27,49 @@ every equivalence test took its skip path is green and meaningless. With Verilat
 present, the emitted Verilog for every corpus design is compiled, run, and compared
 against `ferrite-lithic-sim` cycle by cycle.
 
-The corpus paid for itself immediately. `crc3` — a three-bit LFSR, one byte per
-cycle, the smallest design with a register and a bit stream — found four defects
-that 471 tests of the tools had not, including `Design::sll` and `Design::srl`
-being *exactly swapped* for the whole of A1 and A2. See
-`docs/adr/0019-step-testbenches-where-await-is-a-clock-edge.md`.
+The corpus paid for itself immediately, and then kept doing it. `crc3` — a three-bit
+LFSR, one byte per cycle, the smallest design with a register and a bit stream —
+found four defects that 471 tests of the tools had not, including `Design::sll` and
+`Design::srl` being *exactly swapped* for the whole of A1 and A2. Every tier since
+has found more, which has made the shape of the finding a constant rather than a
+surprise: **the next design finds a defect the previous test count did not.** Each
+one is written down in `DETAILS.md`.
 
 The design notes that settle the simulator's execution model, the Verilog
-emitter's contract and the port-list rule are in `docs/design-notes.md`, and
-`DETAILS.md` is the single place everything known lives.
+emitter's contract and the port-list rule are in `docs/design-notes.md`, the
+nineteen accepted decisions are in `docs/adr/`, and `DETAILS.md` is the single
+place everything known lives.
+
+### What finishing the entropy tier cost
+
+The last tier arrived in one commit and had never been run: **fourteen of its tests
+failed.** Four were the design's and four were the test's own, plus a mistyped constant
+in `sketch.rs` and a decoder that had no decode test at all. All of it is written down
+in `DETAILS.md`; the short version is that every one of them is a shape this project has
+now seen twice:
+
+- A **constant copied into both the code and its own test** is not checked twice. The
+  FNV-1a offset basis was `0xcbf2_9ce4_8423_2325` where it should have been
+  `...8422_2325`, one digit, and the test's own first assertion used the same wrong
+  constant and so agreed with itself. Only the vectors checked against an external
+  source disagreed.
+- **A counter that runs correctly for every value its author tried.** FSE gave its
+  `-1` "rarer than one in the table" symbol `nbBits = tableLog`, because the state
+  arithmetic that is right for a positive count is wrong for that one.
+- **A reversed bit order that produces a plausible answer.** The FSE initial state was
+  assembled most significant bit first while the stream delivers the low bit first, and
+  a reversed state is a state that exists.
+- **A passing test for the wrong reason.** `read_stored_block` compared a sixteen-bit
+  complement as a sixty-four-bit one, so it rejected every stored block ever written —
+  including the correct ones — and the test asserting that a *broken* complement is
+  refused was passing *because* of the bug.
+
+One measurement contradicted a claim the docs used to make: **`huffman` cannot retire
+one symbol per cycle.** A decode spends `code_len` bits and the host supplies one bit per
+cycle, so the rate is one symbol per code length — seven, for DEFLATE's shortest fixed
+code. `fse` *can*, because an FSE transition is allowed to cost zero bits. That
+difference is the whole distinction between the two decoders and was invisible until the
+rate was measured rather than asserted.
 
 ### `ferrite-lithic-bits`
 
@@ -77,17 +117,16 @@ Deliberate asymmetries, inherited from Hardcaml and kept:
 Division by zero is refused rather than wrapped, and signed division overflow
 (`-2^(w-1) / -1`) is refused rather than returned as `-2^(w-1)`.
 
-605 tests across the ten crates: 96 in `ferrite-lithic-bits`, 116 in
-`ferrite-lithic-ir`, 55 in the front end, 51 in the simulator, 51 in the Verilog
-emitter, 39 in `ferrite-lithic-derive`, 42 in `ferrite-lithic-wave`, 32 in
-`ferrite-lithic-cosim`, 17 in `ferrite-lithic-tb` and 106 in
+810 tests across the ten crates, 57 of them doctests: 96 in `ferrite-lithic-bits`,
+116 in `ferrite-lithic-ir`, 58 in the front end, 52 in the simulator, 52 in the
+Verilog emitter, 39 in `ferrite-lithic-derive`, 42 in `ferrite-lithic-wave`, 33 in
+`ferrite-lithic-cosim`, 17 in `ferrite-lithic-tb` and 294 in
 `ferrite-lithic-corpus`.
 
 The corpus is where the count is growing fastest, and not because the algorithms are
-hard. Nine designs so far — CRC-3, CRC-32, hex, base64, SHA-256, AES-128, ChaCha20,
-GHASH and the shared reflected-LFSR recurrence — each differentially tested against
-the crate that defines it, driven through the step testbench, and cosimulated against
-Verilator. The bits crate
+hard. Twenty-one designs so far, plus the shared reflected-LFSR recurrence, across
+seven tiers — each differentially tested against the crate that defines it, driven
+through the step testbench, and cosimulated against Verilator. The bits crate
 runs them in four layers: unit tests, doctests, property tests against a
 `num-bigint` oracle, an exhaustive enumeration of every value and operand pair up
 to width 6, and an explicit width 1..40 sweep for `mul` covering the
@@ -142,6 +181,17 @@ nesting possible. The `RefCell` is quarantined to the builder: a `Signal` is a
 node id and a cached width with no reference *into* the arena, so the graph stays
 cheap to traverse, and every borrow is taken and released inside one method body
 that cannot re-enter.
+
+**A lookup table is a multiplexer tree, and the API says so.**
+`Design::rom(address, &table, value_width)` builds exactly the graph a human would
+write with `Design::case_` — one arm per entry, emitting `always @* case`. It is
+not a memory, because the IR has no initialised-memory node: `Design::mem` is
+zero-filled in both backends and the simulator's initialise-to-value refuses it, so
+there is no way to say "these are the contents". For a nibble or sextet LUT that is
+close enough to the truth to use without comment; for a 256-entry alphabet map or a
+DFA transition table it is a deep mux where real silicon would infer block RAM. The
+cost is written down at the definition rather than left to be discovered in a
+netlist.
 
 ### `ferrite-lithic-sim`
 
@@ -395,6 +445,55 @@ still a three-bit LFSR and still produces three bits; it just computes a differe
 CRC. Both were checked against the `crc` crate over random input: `0b110` agrees
 everywhere, `0b011` disagrees on 263 of them.
 
+The designs are grouped into tiers, and the tier is the argument for including them:
+
+| Tier | Designs | Why it earns its place |
+|---|---|---|
+| LFSR and checksums | `crc3`, `crc32`, `lfsr`, `ghash` | flops and two conditional XORs, a byte per clock, against a software table lookup that costs 8 kB |
+| Block ciphers | `sha256`, `chacha20`, `aes` | 64 unrolled rounds and no ROM — and the opposite case, where the S-box *is* the design |
+| Codecs | `hex`, `base64` | LUTs: the tier that validates the toolchain cheaply |
+| Automata | `memchr`, `aho_corasick`, `dfa` | one state register, one transition table, one byte per edge |
+| Data infrastructure | `bitpack`, `rle`, `roaring`, `hamming`, `sorting`, `sketch` | the decode kernels of a columnar engine, and the probabilistic sketches |
+| Packet | `packet` | a 64-byte header window in, every field out, combinationally |
+| Entropy coding | `huffman`, `fse`, `deflate` | serial and entropy-bound, so the case for building rather than calling — and the tier currently red |
+
+Three results from the newer tiers belong here rather than only in `DETAILS.md`,
+because two of them are disagreements rather than designs.
+
+**The CPU wins `memchr` by 4843x, and that is why the entry exists.** Measured
+rather than assumed: 2540 ns/byte for the design against 0.52 ns/byte for the
+crate. The surviving argument for the automata tier is the multi-pattern one, where
+no SIMD formulation exists and a 5–19 state automaton shares one ROM across lanes. A
+design that claimed to beat AVX2 at single-byte search would have been dishonest, so
+`memchr` is in the corpus as the baseline the other two are measured against.
+
+**`regex-automata`'s forward dense DFA does not reproduce its own `find_iter`.**
+`dfa::regex::Regex` searches forward-then-reverse, so in the forward DFA a match
+state means "committed and still extendable" rather than "a match ends here": for
+`a`, the match is only visible on the EOI transition, and a byte-at-a-time forward
+walk diverges systematically. `dfa` therefore reproduces the DFA verbatim and claims
+nothing about match positions, and four rows of that divergence are pinned as a
+test. `aho_corasick`, by contrast, reproduces `find_iter` exactly — the whole
+difference is one multiplexer lifting the search's stop rule out of the loop. That
+contrast is the most useful thing in the tier.
+
+**`packet` reports three verdicts, not one.** `valid` is structural (Ethernet II,
+IPv4, version 4, an in-range IHL), `csum_ok` is integrity, and `malformed` is
+`ipv4 && !valid` — so a corrupted checksum leaves `valid` high. That is a real design
+position: a switch that wants to drop bad checksums reads `csum_ok`, and one that
+only cares whether a header parses reads `valid` without being forced to also
+compute an adder tree. Folding the checksum into `valid` would have cost that switch
+the choice. IHL is handled rather than bailed on, by masking the checksum
+accumulator with `2 * IHL`, so a 24-byte header sums the words it actually has.
+And the IP rebase was slicing from the wrong end: `byte` treats index 0 as the
+*most* significant byte, so dropping the Ethernet header keeps the window's low
+bits, and the code sliced from `offset * 8`. Every IP field read as the byte
+`offset` earlier, the checksum never verified, and `valid` was stuck low — the same
+shape as `sll` and `srl` being swapped. A constant that looks right, builds a graph
+of exactly the right width, and means the opposite of what it says; found by a test
+that dumps every output for a known frame, because a design which reads
+consistently wrong fields otherwise looks like it is working.
+
 ### `ferrite-lithic-cosim`
 
 The emitted Verilog, checked against the simulator, cycle by cycle.
@@ -519,7 +618,7 @@ Crate layout
 | `ferrite-lithic-wave` | Cycle-indexed values, asserted on directly, plus a VCD rendering | A2 **done** |
 | `ferrite-lithic-cosim` | Verilator equivalence checking against `ferrite-lithic-sim` | A2 **done** |
 | `ferrite-lithic-tb` | Coroutine/async-style step testbenches, where every `.await` is one clock edge | A3 **done** |
-| `ferrite-lithic-corpus` | Verified designs that check the toolchain against the original crate for each algorithm | — |
+| `ferrite-lithic-corpus` | Verified designs in seven tiers, each checked against the crate that defines it, through the step testbench, and against Verilator | — |
 
 Design decisions
 ----------------
@@ -539,6 +638,22 @@ Design decisions
    or remainder at any layer. A real datapath needs `/` for constant-reciprocal
    tricks, so `udiv`, `sdiv`, `urem` and `srem` are genuine primitives here and
    documented as inferring large dividers.
+
+Known gaps
+----------
+
+**There is no initialised-memory node in the IR.** `Design::mem` is zero-filled in
+both backends and the simulator's initialise-to-value refuses it, so every lookup
+table in the corpus — AES's S-box, the DFA transition tables, the bit-packing
+masks — is a `Design::case_` or a multiplexer tree. That is close to the truth for
+a nibble LUT and a lie for a 256-entry alphabet map, a Huffman decode table or a
+regex DFA, all of which are block RAM in silicon. It is the single highest-value
+addition left to the toolchain, and `Design::rom` documents the cost instead of
+hiding it.
+
+`blake3.rs` and `fft.rs` are placeholder files that are not even declared as
+modules, so nothing compiles them and no test refers to them. Everything else in
+the corpus is implemented and tested.
 
 Building
 --------

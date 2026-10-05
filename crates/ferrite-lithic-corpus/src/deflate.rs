@@ -238,12 +238,15 @@ mod tests {
 
     use super::LEFT_BITS;
 
+    const _: () = assert!(8 < (1u32 << LEFT_BITS));
+
     #[test]
     fn the_count_register_holds_every_value_the_count_takes() {
         // `left` runs 0, 8, 7, ... 1 and back to 0. Four bits is the narrowest width that
         // holds 8, and one bit narrower would wrap the load to zero, so the design would
-        // emit a byte's worth of zeros instead of the byte.
-        assert!(8 < (1u32 << LEFT_BITS));
+        // emit a byte's worth of zeros instead of the byte. The width claim itself is a
+        // `const` assertion above, because it does not depend on anything a test could
+        // observe -- it is arithmetic, and it is checked at compile time.
         for value in 0..=8u32 {
             assert_eq!(value, value & ((1u32 << LEFT_BITS) - 1));
         }

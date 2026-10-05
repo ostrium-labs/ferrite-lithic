@@ -4,13 +4,14 @@ Everything known about this project in one place. Companion documents:
 
 - `docs/design-notes.md` — the IR, simulator and emitter design, read from Hardcaml's source
 - `docs/plans/jane-street-protocol-emulator.md` — the competition plan and timeline
-- `docs/adr/` — 17 accepted architecture decision records
+- `docs/adr/` — 19 accepted architecture decision records
 - `../ferrite-strata/DETAILS.md` — the companion runtime
 
-Status: **Phase A1 in progress.** `ferrite-lithic-bits`, `ferrite-lithic-ir`, the
-`ferrite-lithic` front end and the `ferrite-lithic-sim` cycle simulator are
-implemented, documented and tested (309 tests); the remaining A1 crate, `-rtl`, is
-not yet written. Nothing is published to crates.io yet.
+Status: **Phases A1 through A3 are implemented and tested, and the whole workspace is
+green.** All nine tool crates and `ferrite-lithic-corpus` pass: 810 tests, 753 of them
+unit and integration tests and 57 doctests, with Verilator and Icarus both installed so
+that every equivalence test really ran rather than taking its skip path. Nothing is
+published to crates.io yet.
 
 ## 1. What it is
 
@@ -943,8 +944,8 @@ being wrong. `Handle::set` now applies an input and takes no edge.
 
 ### The algorithms themselves
 
-Nine designs so far. What each one is *for*, in the hardware sense, is the interesting
-part, and the reasons are not all the same:
+Twenty-one designs so far, across seven tiers. What each one is *for*, in the hardware
+sense, is the interesting part, and the reasons are not all the same:
 
 - **CRC-3 and CRC-32** — 3 and 32 flops and two conditional XORs, a byte per clock,
   against a software table lookup of 256 entries. `crc32fast`'s 8 kB of lookup is
@@ -964,24 +965,33 @@ part, and the reasons are not all the same:
 - **hex and base64** — LUTs. Included because they are the tier that validates the
   toolchain cheaply, and because a nibble or sextet table is the smallest honest test of
   whether a ROM lowers correctly.
+- **`memchr`, `aho-corasick` and the `regex-automata` DFA** — one state register, one
+  transition table, one byte per edge. `memchr` is in the corpus as the honest baseline
+  and loses to the CPU by a measured 4843x; the argument for the tier is the
+  multi-pattern search, where no SIMD form exists.
+- **the columnar kernels** — `bitpack`, `rle`, `roaring`, `hamming`, `sorting`, and the
+  three sketches. Decode kernels, a running kernel, and a sorting network measured for
+  depth rather than for layer count.
+- **the entropy decoders** — `huffman`, `fse` and the `deflate` bit layer. Huffman is the
+  canonical-code half, checked against RFC 1951's own published code assignment; FSE has
+  no golden crate available in this workspace at all, so it is checked against a
+  hand-derived table and an independently written encoder; the bit layer round-trips
+  bytes that `miniz_oxide` produced.
+- **`packet`** — a 64-byte header window in, every field out, combinationally.
 
 ### What is still not covered
 
-The rest of the ladder is in flight: `memchr` as the fair SIMD baseline,
-`aho-corasick` and a regex DFA as a transition table plus a state register, the
-columnar decode kernels (bit-unpacking, RLE, delta, dictionary), `roaring`, the three
-sketches, Hamming distance plus top-k over a sorting network, the entropy decoders
-(Huffman, FSE, the DEFLATE bit layer), a fixed-size FFT, header parsing at line rate,
-and BLAKE3 as a tree hash.
+BLAKE3 and a fixed-size FFT are placeholder files with no implementation behind them, and
+are not declared as modules, so nothing compiles them.
 
 The honest gap, and it is a real one: **there is no initialised-memory node in the
 IR.** `Design::mem` is zero-filled in both backends and the simulator's
 initialise-to-value refuses it, so every lookup table in the corpus is a `case_` or a
 mux tree. That is fine for AES's S-box, which is genuinely small, and it is a lie for
 a regex DFA, a Huffman decode table or a 256-entry nibble LUT — those are block RAM in
-silicon and a multiplexer tree here. It is the single highest-value addition left to
-the toolchain, and it is the reason the DFA and entropy-coding entries will document a
-cost that a real design would not pay.
+silicon and a multiplexer tree here. `Design::rom` now exists and is exactly this shape;
+it documents the cost rather than hiding it. It is the single highest-value addition left
+to the toolchain.
 
 The corpus is also the first thing in this project that has needed the golden model
 to be a *different crate*. `crc3fast` is not in the registry index, so the golden
@@ -990,7 +1000,75 @@ the `crc` crate's own `Algorithm` type. The transcription is checked against the
 catalogue's published check value before any of it is trusted, because a
 hand-transcribed parameter set that is wrong agrees with a wrong design perfectly.
 
-What this says about the toolchain is not flattering: 471 tests across eight crates,
+What this says about the toolchain is not flattering: 810 tests across ten crates,
 and a design with 60 lines of shift and XOR found four bugs in a row. The tests were
 not bad, they were aimed at the wrong things. `sll` and `srl` were swapped for the
 entire life of the project and every crate agreed with every other crate about it.
+
+### The entropy-coding tier, and what finishing it cost
+
+The last tier arrived in one commit and had never been run: 14 of its tests failed. What
+they were is worth recording, because every one of them is a shape this project has now
+seen twice.
+
+**Four were the test's fault and four were the design's**, and they are not the same
+shape at all.
+
+The design's, all four found by the same kind of evidence — a *published* value or a
+*hand-derived* table that the design disagreed with:
+
+1. **The FSE low-probability symbol was given the wrong number of bits.** A `-1` count
+   means "rarer than one symbol in the whole table", and the state arithmetic applied to
+   it unchanged handed it `nbBits = tableLog` — a transition spanning the whole table, on
+   a symbol that occurs once in `tableSize` of them. It gets `nbBits = 0` and
+   `newState = 0`. Same shape as `sll` and `srl`: a counter that runs correctly for every
+   value the author tried.
+2. **The FSE initial state was assembled most significant bit first**, while the stream
+   delivers the state's *low* bit first. The state register was therefore reversed, and
+   a reversed state is a state that exists, decodes plausibly, and is wrong from the
+   first symbol on. The design now shifts right and inserts at the top.
+3. **The bits that build the initial state were also left in the decode buffer**, so the
+   first transition read the initial state back as its own `low` bits. Every symbol after
+   the first was wrong, and the first was right — which is what makes it easy to miss.
+4. **A FSE request for zero symbols hung.** The design loaded the initial state before it
+   looked at the count, so a host asking for nothing waited for five bits that nobody was
+   going to send. It now refuses the request on the `init` edge.
+
+The test's own, which is the more interesting half because each one *passed* the wrong
+way first:
+
+5. **`read_stored_block` compared the sixteen-bit complement as a sixty-four-bit one**, so
+   `len != !nlen` was true for every stored block ever written — including the correct
+   ones. And `a_stored_block_with_a_wrong_complement_is_rejected`, the test that exists to
+   check the complement, was passing *because of* the bug rather than despite it.
+6. **Two round-trip tests asked the FSE encoder for symbols the table could not reach** —
+   a message of symbols `0..6` against a two-symbol table, and the `-1` symbol, which no
+   transition can reach but state zero. Both failed inside the encoder, which is a test
+   bug and not a finding about the design.
+7. **The DEFLATE harness stopped one cycle after the last byte was *loaded*,** so that
+   byte's eight bits never shifted out. Every round trip came up six to eight bits short
+   and looked like a bit-order defect.
+8. **A proptest generated a sixteen-bit field out of an eight-bit vector,** so it failed
+   on an out-of-bounds index and said nothing about bit order.
+
+And one more, in `sketch.rs`, which is the purest instance of the pattern in the project:
+the FNV-1a offset basis was mistyped as `0xcbf2_9ce4_8423_2325` instead of
+`0xcbf2_9ce4_8422_2325` — one digit. The published check values caught it, because the
+first assertion in the test *used the same wrong constant* and so agreed with itself, and
+only the vectors checked against an external source disagreed. A constant copied into both
+the code and its own test is not checked twice.
+
+**Huffman had no decode test at all.** It shipped with unit tests on the canonical-code
+*builder* and nothing that ever pushed a bit stream through the *decoder*, so the table's
+index order and the design's peek reversal had never been shown to agree. It has a test
+target now: the RFC 1951 fixed literal/length code checked against the RFC's own
+published numbers, a round trip through an independently written encoder, a truncated-code
+stall, and Verilator equivalence.
+
+And one measurement worth keeping, because it contradicts a claim the module used to
+make: **`huffman` cannot retire one symbol per cycle.** A decode spends `code_len` bits and
+the host supplies one bit per cycle, so the rate is one symbol per code length, which for
+DEFLATE's shortest fixed code is seven. The module docs said "one symbol per cycle, which
+is the point"; that is true only of the one-bit single-symbol code. `fse` *can* do it,
+because an FSE transition is allowed to cost zero bits — which is the whole difference
+between the two decoders and was not visible until the rate was measured.

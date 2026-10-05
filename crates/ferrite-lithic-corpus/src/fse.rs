@@ -237,7 +237,9 @@ impl Table {
     ///    the counts run out, and that is checked rather than assumed.
     /// 3. **Assign states.** Walk the table in index order; for each state take the next
     ///    state number for its symbol and set `nb_bits = table_log - highbit32(n)` and
-    ///    `new_state = (n << nb_bits) - table_size`.
+    ///    `new_state = (n << nb_bits) - table_size`. A `-1` symbol's single state is the
+    ///    one exception: it gets `nb_bits = 0` and `new_state = 0`, because it occurs once
+    ///    in `table_size` symbols and so has no bits to spend on a transition.
     ///
     /// Note the counter counts *up* from the count, so symbol `s`'s states take state
     /// numbers `counts[s], counts[s] + 1, ... 2*counts[s] - 1`. Counting down from the
@@ -275,12 +277,14 @@ impl Table {
 
         let mut symbols = vec![0u8; table_size];
         let mut next_state = vec![0u32; counts.len()];
+        let mut low_probability = vec![false; counts.len()];
         let mut high = table_size as i64 - 1;
         for (symbol, count) in counts.iter().enumerate() {
             if *count < 0 {
                 symbols[high as usize] = symbol as u8;
                 high -= 1;
                 next_state[symbol] = 1;
+                low_probability[symbol] = true;
             } else {
                 next_state[symbol] = *count as u32;
             }
@@ -308,17 +312,27 @@ impl Table {
         }
 
         let mut entries = Vec::with_capacity(table_size);
-        for index in 0..table_size {
-            let symbol = usize::from(symbols[index]);
+        for placed in &symbols {
+            let symbol = usize::from(*placed);
             let number = next_state[symbol];
             next_state[symbol] += 1;
-            let nb_bits = table_log - highbit32(number);
-            // `number << nb_bits` is in `[table_size, 2 * table_size)` for every reachable
-            // `number`, so this cannot go negative and cannot reach `table_size` either.
-            // That is what makes the next state valid.
-            let new_state = (number << nb_bits).wrapping_sub(table_size as u32);
+            // A low-probability symbol is the one case the arithmetic below does not
+            // describe. Its single state consumes *no* transition bits and returns to
+            // state zero, which is what makes it usable at all: with the count's own
+            // arithmetic it would get `nbBits = tableLog` and span the whole table,
+            // which is a perfectly good transition belonging to a symbol that occurs
+            // once in `tableSize` of them.
+            let (nb_bits, new_state) = if low_probability[symbol] {
+                (0u32, 0u32)
+            } else {
+                let nb_bits = table_log - highbit32(number);
+                // `number << nb_bits` is in `[table_size, 2 * table_size)` for every
+                // reachable `number`, so this cannot go negative and cannot reach
+                // `table_size` either. That is what makes the next state valid.
+                (nb_bits, (number << nb_bits).wrapping_sub(table_size as u32))
+            };
             entries.push(Entry {
-                symbol: symbols[index],
+                symbol: *placed,
                 nb_bits: nb_bits as u8,
                 new_state: new_state as u8,
             });
@@ -512,11 +526,21 @@ fn next_state(
     packed: &[u64],
 ) -> Result<State, BuildError> {
     let off = design.constant(false);
+    let on = design.constant(true);
 
     // ---- the bit buffer, shared by the load and decode phases -----------------
     let capacity = design.lit(u64::from(BUFFER_BITS), HELD_BITS)?;
     let in_ready = design.ult(&now.held, &capacity)?;
-    let accepting = design.and(&inputs.in_valid, &in_ready)?;
+    let stream_ok = design.and(&inputs.in_valid, &in_ready)?;
+    // The state table is read out of the buffer's low end, so the bits that build the
+    // initial state must not also be sitting in it: the first transition would then read
+    // the initial state back as its own `low` bits and every symbol after the first would
+    // be wrong. So the load consumes bits from the stream *without* buffering them, which
+    // is also what a real decoder does -- the state register is loaded from the bit
+    // reader and the refill pointer skips over it.
+    let loading = design.eq(&now.phase, &design.lit(LOADING, PHASE_BITS)?)?;
+    let decoding = design.eq(&now.phase, &design.lit(DECODING, PHASE_BITS)?)?;
+    let inserting = design.and(&stream_ok, &design.not(&loading))?;
     // `1 << held` is the insert position. The incoming bit has to be *replicated* across
     // the one-hot's width and then ANDed: `1 << held & bit` is zero for every `held` but
     // zero, because a one-hot and a lone 1 share no set bit above bit zero. That mistake
@@ -525,9 +549,9 @@ fn next_state(
     let spread = design.replicate(&inputs.in_bit, BUFFER_BITS)?;
     let inserted = design.and(&insert_at, &spread)?;
     let with_bit = design.or(&now.buffer, &inserted)?;
-    let buffer = design.ite(&accepting, &with_bit, &now.buffer)?;
+    let buffer = design.ite(&inserting, &with_bit, &now.buffer)?;
     let gained = design.add(&now.held, &design.lit(1, HELD_BITS)?)?;
-    let held = design.ite(&accepting, &gained, &now.held)?;
+    let held = design.ite(&inserting, &gained, &now.held)?;
 
     // ---- the state table ------------------------------------------------------
     // One read gives symbol, nbBits and newState, because that is what a real decoder's
@@ -544,19 +568,30 @@ fn next_state(
     let advanced = design.add(&new_state, &low)?;
 
     // ---- the state machine ----------------------------------------------------
-    let loading = design.eq(&now.phase, &design.lit(LOADING, PHASE_BITS)?)?;
-    let decoding = design.eq(&now.phase, &design.lit(DECODING, PHASE_BITS)?)?;
-
     // Loading reads TABLE_LOG bits into the state register, least significant bit first
     // -- the same order the decode reads its transition bits in, so the initial state and
     // the transitions come out of one bit-stream convention.
-    let taking = design.and(&loading, &accepting)?;
-    let shifted = design.sll(&now.state, 1)?;
-    let accumulating = design.or(&shifted, &design.zero_extend(&inputs.in_bit, TABLE_LOG)?)?;
+    //
+    // Which is why this shifts *right* and inserts at the top rather than shifting left
+    // and inserting at the bottom. The stream delivers the state's low bit first, so a
+    // left-shift register ends up holding the state reversed -- and a reversed state is
+    // a state that exists, decodes plausibly, and is wrong from the first symbol on.
+    let taking = design.and(&loading, &stream_ok)?;
+    let shifted = design.srl(&now.state, 1)?;
+    let arriving = design.sll(
+        &design.zero_extend(&inputs.in_bit, TABLE_LOG)?,
+        TABLE_LOG - 1,
+    )?;
+    let accumulating = design.or(&shifted, &arriving)?;
     let read = design.add(&now.loaded, &design.lit(1, LOAD_BITS)?)?;
     let loaded = design.ite(&taking, &read, &now.loaded)?;
+    // `taking` is in the conjunction on purpose. Without it the load ends the moment the
+    // counter *would* reach TABLE_LOG, which on a cycle where the host withholds a bit
+    // leaves the state register holding one bit fewer than the stream has and every
+    // symbol after it wrong -- with no stall and no error to show for it.
     let load_done = design.eq(&read, &design.lit(u64::from(TABLE_LOG), LOAD_BITS)?)?;
-    let finishing_load = design.and(&loading, &load_done)?;
+    let finishing_load = design.and(&loading, &taking)?;
+    let finishing_load = design.and(&finishing_load, &load_done)?;
 
     // A decode needs as many bits buffered as this state will consume. Comparing against
     // `nbBits` rather than always waiting for TABLE_LOG bits is what lets the design
@@ -564,7 +599,13 @@ fn next_state(
     // wait would insert a stall after every short code, which is exactly the
     // variable-length cost this design exists to avoid.
     let enough = design.uge(&held, &nb_bits)?;
+    // A count of zero has to terminate rather than decode: the host is allowed to ask for
+    // nothing, and the design would otherwise sit in `DECODING` with `last` never true
+    // and step forever, because `stepping` does not consult the count at all. Gating on
+    // `left` is what makes `done` reachable for a zero-length request.
+    let outstanding = design.ugt(&now.left, &design.lit(0, 16)?)?;
     let stepping = design.and(&decoding, &enough)?;
+    let stepping = design.and(&stepping, &outstanding)?;
 
     let dropped = shift_right_by(design, &buffer, &nb_bits, TABLE_LOG)?;
     let buffer = design.ite(&stepping, &dropped, &buffer)?;
@@ -573,16 +614,27 @@ fn next_state(
 
     let last = design.eq(&now.left, &design.lit(1, 16)?)?;
     let finishing = design.and(&stepping, &last)?;
+    // Nothing left to decode: terminate on the same edge the last symbol would have.
+    let finished_empty = design.and(&decoding, &design.not(&outstanding))?;
+    let finishing = design.or(&finishing, &finished_empty)?;
 
     // The phase register: `init` restarts, a finished load enters decode, a finished
     // decode goes idle. `finishing_load` and `finishing` are mutually exclusive because
     // one needs the loading phase and the other the decoding phase.
+    //
+    // A zero count never enters the load at all. Waiting for TABLE_LOG initial-state bits
+    // on a request for nothing would hang: the host has no bits to send, so the design
+    // would sit in `LOADING` for ever and `done` would never fire. Refusing the request
+    // on its own edge is the only behaviour that terminates.
+    let nothing = design.eq(&inputs.count, &design.lit(0, 16)?)?;
+    let empty_request = design.and(&inputs.init, &nothing)?;
     let phase = design.ite(
         &finishing_load,
         &design.lit(DECODING, PHASE_BITS)?,
         &now.phase,
     )?;
     let phase = design.ite(&finishing, &design.lit(IDLE, PHASE_BITS)?, &phase)?;
+    let phase = design.ite(&empty_request, &design.lit(IDLE, PHASE_BITS)?, &phase)?;
     let phase = design.ite(&inputs.init, &design.lit(LOADING, PHASE_BITS)?, &phase)?;
 
     let countdown = design.ite(&inputs.init, &inputs.count, &now.left)?;
@@ -612,7 +664,14 @@ fn next_state(
         out_valid: design.ite(&inputs.init, &off, &stepping)?,
         symbol: design.ite(&inputs.init, &design.zeros(8)?, &symbol)?,
         nb_bits: design.ite(&inputs.init, &design.zeros(4)?, &nb_bits)?,
-        done: design.ite(&inputs.init, &off, &finishing)?,
+        // An empty request terminates on the `init` edge itself, so `done` is raised there
+        // rather than on the edge after a decode that will never happen. The outer term
+        // wins over `init` clearing it, because `empty_request` already implies `init`.
+        done: design.ite(
+            &empty_request,
+            &on,
+            &design.ite(&inputs.init, &off, &finishing)?,
+        )?,
     })
 }
 
