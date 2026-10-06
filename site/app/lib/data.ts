@@ -14,6 +14,7 @@ export interface Crate {
   what: string;
   /** The documentation page that explains this crate, in `docs/`. */
   doc: string;
+  dependencies: string[];
 }
 
 export const CRATES: Crate[] = [
@@ -23,6 +24,7 @@ export const CRATES: Crate[] = [
     tier: "A1",
     what: "Fixed-width bitvectors over u64 words, with runtime widths.",
     doc: "bits",
+    dependencies: [],
   },
   {
     name: "ferrite-lithic-ir",
@@ -30,6 +32,7 @@ export const CRATES: Crate[] = [
     tier: "A1",
     what: "The graph: nodes, widths, and nothing else. No behaviour, no types.",
     doc: "ir",
+    dependencies: ["bits"],
   },
   {
     name: "ferrite-lithic",
@@ -37,6 +40,7 @@ export const CRATES: Crate[] = [
     tier: "A2",
     what: "The front end. Design is an arena of nodes; signals are ids.",
     doc: "design",
+    dependencies: ["bits", "ir"],
   },
   {
     name: "ferrite-lithic-sim",
@@ -44,6 +48,7 @@ export const CRATES: Crate[] = [
     tier: "A2",
     what: "A cycle simulator. Sequential on the clock edge, combinational within it.",
     doc: "sim",
+    dependencies: ["design", "bits", "ir"],
   },
   {
     name: "ferrite-lithic-rtl",
@@ -51,6 +56,7 @@ export const CRATES: Crate[] = [
     tier: "A2",
     what: "The Verilog emitter: one structural always block for the whole design.",
     doc: "rtl",
+    dependencies: ["bits", "ir"],
   },
   {
     name: "ferrite-lithic-derive",
@@ -58,6 +64,7 @@ export const CRATES: Crate[] = [
     tier: "A3",
     what: "Port lists by derive, so a port is a struct field and not a string.",
     doc: "derive",
+    dependencies: [],
   },
   {
     name: "ferrite-lithic-wave",
@@ -65,6 +72,7 @@ export const CRATES: Crate[] = [
     tier: "A3",
     what: "Cycle-indexed values asserted on directly, plus a VCD rendering.",
     doc: "wave",
+    dependencies: ["design", "bits"],
   },
   {
     name: "ferrite-lithic-cosim",
@@ -72,6 +80,7 @@ export const CRATES: Crate[] = [
     tier: "A3",
     what: "Verilator equivalence checking against the simulator, cycle by cycle.",
     doc: "cosim",
+    dependencies: ["design", "bits", "ir", "rtl", "sim", "wave"],
   },
   {
     name: "ferrite-lithic-tb",
@@ -79,13 +88,15 @@ export const CRATES: Crate[] = [
     tier: "A3",
     what: "Coroutine step testbenches, where every .await is one clock edge.",
     doc: "tb",
+    dependencies: ["design", "sim", "bits"],
   },
   {
     name: "ferrite-lithic-corpus",
     tests: 305,
     tier: "—",
-    what: "Twenty-one verified designs. The tier that finds the tools' bugs.",
+    what: "Verified algorithms. The corpus that finds the tools' bugs.",
     doc: "corpus",
+    dependencies: ["design", "bits", "derive"],
   },
 ];
 
@@ -98,7 +109,7 @@ export interface Tier {
 export const TIERS: Tier[] = [
   {
     name: "LFSR & checksums",
-    designs: ["crc3", "crc32", "lfsr", "ghash"],
+    designs: ["crc3", "crc32", "ghash"],
     why: "flops and two conditional XORs, a byte per clock",
   },
   {
@@ -132,3 +143,14 @@ export const TIERS: Tier[] = [
     why: "serial and entropy-bound, so the case for building",
   },
 ];
+/** Project totals from the audited repository snapshot. Per-crate and tier tables
+ * include historical counts and planned entries, so totals are recorded separately. */
+export const PROJECT_STATS = {
+  tests: 811,
+  crates: CRATES.length,
+  designs: TIERS.reduce((sum, tier) => sum + tier.designs.length, 0),
+  cosimCoverage: 100,
+  checksPerDesign: 3,
+  source: "README.md",
+  tiers: TIERS.length,
+} as const;

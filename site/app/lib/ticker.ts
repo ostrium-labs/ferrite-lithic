@@ -13,44 +13,45 @@ interface Entry {
   draw: Frame;
   running: boolean;
   last: number;
+  elapsed: number;
 }
 
 const entries = new Map<object, Entry>();
 let rafId = 0;
-let startedAt = 0;
+
 
 function pump(now: number): void {
-  if (startedAt === 0) startedAt = now;
+  rafId = 0;
 
   for (const entry of entries.values()) {
     if (!entry.running) continue;
-    const delta = now - entry.last;
+    const delta = entry.last ? Math.min(now - entry.last, 64) : 0;
+    entry.elapsed += delta;
     // A tab that was backgrounded hands back a huge delta; clamping keeps a demo from
     // jumping hundreds of steps at once when it is looked at again.
-    entry.draw(now - startedAt, Math.min(delta, 64));
+    entry.draw(entry.elapsed, delta);
     entry.last = now;
   }
 
-  rafId = entries.size > 0 ? requestAnimationFrame(pump) : 0;
+  ensureRunning();
 }
 
 function ensureRunning(): void {
-  if (rafId === 0 && entries.size > 0) {
-    startedAt = 0;
+  if (rafId === 0 && Array.from(entries.values()).some(entry => entry.running)) {
     rafId = requestAnimationFrame(pump);
   }
 }
 
 /** Registers a draw callback for `owner`, keyed so it can be replaced or removed. */
 export function onFrame(owner: object, draw: Frame): void {
-  entries.set(owner, { draw, running: false, last: 0 });
-  ensureRunning();
+  entries.set(owner, { draw, running: false, last: 0, elapsed: 0 });
 }
 
 /** Stops drawing for `owner` without forgetting it. */
 export function pause(owner: object): void {
   const entry = entries.get(owner);
   if (entry) entry.running = false;
+  stopIfIdle();
 }
 
 /** Resumes drawing for `owner`. */
@@ -59,13 +60,18 @@ export function resume(owner: object): void {
   if (entry) {
     entry.running = true;
     entry.last = 0;
+    ensureRunning();
   }
 }
 
 /** Removes `owner` from the loop entirely. */
 export function offFrame(owner: object): void {
   entries.delete(owner);
-  if (entries.size === 0 && rafId !== 0) {
+  stopIfIdle();
+}
+
+function stopIfIdle(): void {
+  if (!Array.from(entries.values()).some(entry => entry.running) && rafId) {
     cancelAnimationFrame(rafId);
     rafId = 0;
   }
@@ -75,7 +81,7 @@ export function offFrame(owner: object): void {
  * Calls `onEnter` the first time `target` scrolls into view and again every time it
  * leaves, so a demo can pause its own work while nobody is looking at it.
  */
-export function onVisibility(target: Element, onEnter: () => void, onLeave: () => void): void {
+export function onVisibility(target: Element, onEnter: () => void, onLeave: () => void): () => void {
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
@@ -86,6 +92,7 @@ export function onVisibility(target: Element, onEnter: () => void, onLeave: () =
     { threshold: 0.05 },
   );
   observer.observe(target);
+  return () => observer.disconnect();
 }
 
 /**
@@ -142,14 +149,12 @@ export function logicalSize(canvas: HTMLCanvasElement): { width: number; height:
 /**
  * The instrument palette, read once so the demos cannot drift apart visually.
  *
- * These are the `tokens.css` values under `.instrument` — the same six colours
- * with the ground flipped. The demos draw on a screen rather than on paper, so
+ * The shared paper palette is inverted for an instrument. Demos draw on a screen, so
  * they get the screen side of the one palette; the trace colour is amber in
  * both, which is what makes a figure here feel like it belongs to the page.
  *
  * There is no third accent. `accent2` is the same amber at a different job
- * (a wire rather than a signal) and `accent3` is the fault colour, so a figure
- * cannot introduce a hue the design system does not have.
+ * (a wire rather than a signal). Faults are shown in the forensic HTML evidence.
  */
 export const palette = {
   bg: "#14181a",
@@ -158,13 +163,8 @@ export const palette = {
   lineSoft: "#242c2e",
   ink: "#e9ebe9",
   inkDim: "#a4ada9",
-  inkFaint: "#6d7674",
   accent: "#e8894a", // the trace
   accent2: "#c98a5e", // a wire: the trace, quieter
-  accent3: "#d4695a", // the fault colour
-  hot: "#d4695a",
-  good: "#7fa88c",
-  warn: "#e0b357",
 } as const;
 
 /** Rounded rectangle, because `roundRect` is not universal and this is not worth a shim file. */
@@ -187,4 +187,4 @@ export function roundRect(
 }
 
 /** Monospaced text, because every number on this page is a measurement. */
-export const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+export const MONO = '"IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace';

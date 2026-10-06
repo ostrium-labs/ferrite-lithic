@@ -18,7 +18,9 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { logicalSize, onFrame, onVisibility, palette, pause, prepareCanvas, resume } from "../lib/ticker";
+import { palette } from "../lib/ticker";
+import { useOnceCanvas } from "./canvas";
+import { Instrument } from "./Instrument";
 
 const STEPS = [
   {
@@ -66,10 +68,10 @@ function draw(
     { name: "q", y: 0.72, h: 0.16, kind: "bus" as const },
   ];
   const dValues = ["0xa3", "0xa3", "0x1f", "0x1f", "0xc0", "0xc0", "0x5a", "0x5a"];
-  const qValues = ["—", "—", "0xa3", "0xa3", "0x1f", "0x1f", "0xc0", "0xc0"];
+  const qValues = ["—", "0xa3", "0xa3", "0x1f", "0x1f", "0xc0", "0xc0", "0x5a"];
 
   /* ---- cycle boundaries; the active one is the trace colour. */
-  context.font = `11px "IBM Plex Mono", monospace`;
+  context.font = `15px "IBM Plex Mono", monospace`;
   context.textBaseline = "alphabetic";
 
   for (let cycle = 0; cycle <= TOTAL; cycle += 1) {
@@ -82,13 +84,13 @@ function draw(
     context.lineTo(Math.round(x) + 0.5, pad.top + plotHeight + 12);
     context.stroke();
 
-    context.fillStyle = isActive ? palette.accent : palette.inkFaint;
+    context.fillStyle = isActive ? palette.accent : palette.inkDim;
     context.textAlign = "center";
     context.fillText(String(cycle), x, pad.top + plotHeight + 26);
   }
 
   /* ---- trace names */
-  context.fillStyle = palette.inkFaint;
+  context.fillStyle = palette.inkDim;
   context.textAlign = "right";
   for (const trace of traces) {
     context.fillText(trace.name, pad.left - 12, pad.top + trace.y * plotHeight + trace.h * plotHeight + 4);
@@ -96,7 +98,7 @@ function draw(
 
   /* ---- the traces */
   const from = pad.left;
-  const to = pad.left + (active + 1) * cycleWidth;
+  const to = pad.left + TOTAL * cycleWidth;
 
   for (const trace of traces) {
     const y = pad.top + trace.y * plotHeight;
@@ -192,7 +194,7 @@ function drawBus(
   cycleWidth: number,
   active: number,
 ): void {
-  context.font = `12px "IBM Plex Mono", monospace`;
+  context.font = `16px "IBM Plex Mono", monospace`;
   context.textBaseline = "middle";
   context.textAlign = "center";
 
@@ -219,14 +221,13 @@ function drawBus(
     );
 
     if (cellWidth > 24) {
-      context.fillStyle = isActive ? palette.ink : isHold ? palette.inkFaint : palette.inkDim;
+      context.fillStyle = isActive ? palette.ink : isHold ? palette.inkDim : palette.inkDim;
       context.fillText(value, cellX + (cellWidth - 1) / 2, y + h / 2 + 0.5);
     }
   }
 }
 
 export function CycleWalk() {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [active, setActive] = useState(0);
   const stepRefs = useRef<(HTMLLIElement | null)[]>([]);
 
@@ -238,15 +239,12 @@ export function CycleWalk() {
     if (nodes.length === 0) return;
 
     const observer = new IntersectionObserver(
-      (entries) => {
-        let best: { index: number; ratio: number } | null = null;
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const index = nodes.indexOf(entry.target as HTMLLIElement);
-          if (index < 0) continue;
-          if (!best || entry.intersectionRatio > best.ratio) best = { index, ratio: entry.intersectionRatio };
-        }
-        if (best) setActive(best.index);
+      () => {
+        const middle = innerHeight / 2;
+        const candidates = nodes.map((node, index) => ({ index, rect: node.getBoundingClientRect() }))
+          .filter(({ rect }) => rect.bottom > 0 && rect.top < innerHeight);
+        candidates.sort((a, b) => Math.abs((a.rect.top + a.rect.bottom) / 2 - middle) - Math.abs((b.rect.top + b.rect.bottom) / 2 - middle));
+        if (candidates[0]) setActive(candidates[0].index);
       },
       // A band across the middle of the viewport: "the step I am reading", not
       // "a step I have scrolled past".
@@ -257,52 +255,9 @@ export function CycleWalk() {
     return () => observer.disconnect();
   }, []);
 
-  /* ---- the canvas follows the text, with a short ease so a step change reads as
-     movement rather than a jump. */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const reduced = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    let shown = active;
-    let since = performance.now();
-
-    const render = (elapsed: number): void => {
-      const context = prepareCanvas(canvas);
-      if (!context) return;
-      const size = logicalSize(canvas);
-
-      if (!reduced) {
-        // 140ms is long enough to read as intent and short enough not to lag the text.
-        const progress = Math.min(1, (elapsed - since) / 140);
-        const eased = 1 - (1 - progress) ** 3;
-        shown += (active - shown) * eased;
-        if (Math.abs(active - shown) < 0.002) shown = active;
-      } else {
-        shown = active;
-      }
-
-      const settle = Math.min(1, (elapsed - since) / 240);
-      draw(context, size.width, size.height, Math.round(shown), settle);
-    };
-
-    since = 0;
-    onFrame(canvas, render);
-    onVisibility(
-      canvas,
-      () => resume(canvas),
-      () => pause(canvas),
-    );
-
-    const onResize = (): void => render(0);
-    globalThis.addEventListener("resize", onResize);
-    render(0);
-
-    return () => {
-      pause(canvas);
-      globalThis.removeEventListener("resize", onResize);
-    };
-  }, [active]);
+  const canvasRef = useOnceCanvas(240, (context, width, height, elapsed) => {
+    draw(context, width, height, active, Math.min(1, elapsed / 240));
+  }, active);
 
   return (
     <section className="section section--walk" id="cycle">
@@ -311,7 +266,7 @@ export function CycleWalk() {
           <h2>Read one cycle</h2>
           <p className="prose">
             Four things are true about a clock edge, and they are easier to see than to
-            read. Each paragraph below moves the diagram.
+            read. Scroll through the explanation or select a step.
           </p>
           <ol className="walk__steps">
             {STEPS.map((step, index) => (
@@ -322,7 +277,7 @@ export function CycleWalk() {
                 }}
                 className={`walk__step${index === active ? " is-active" : ""}`}
               >
-                <span className="walk__label">{step.label}</span>
+                <button type="button" className="walk__label" onClick={() => setActive(index)} aria-pressed={active === index}>{String(index + 1).padStart(2, "0")} / {step.label}</button>
                 <p>{step.text}</p>
               </li>
             ))}
@@ -330,9 +285,12 @@ export function CycleWalk() {
         </div>
 
         <figure className="walk__figure">
-          <canvas ref={canvasRef} width={900} height={420} aria-hidden="true" />
+          <Instrument title="Clock-edge inspection" description="Scrollable clock, input and register traces" compact>
+            <canvas id="cycle-canvas" ref={canvasRef} width={900} height={420} role="img" aria-label={`Step ${active + 1}: ${STEPS[active].text}`} />
+          </Instrument>
+          <div className="walk__controls" aria-label="Inspect a clock edge">{STEPS.map((step, index) => <button type="button" key={step.label} onClick={() => setActive(index)} aria-pressed={active === index}>{index + 1}. {step.label}</button>)}</div>
           <figcaption>
-            Cycle {active} of 8. <code>d</code> is the input bus and <code>q</code> is the
+            Inspection {active + 1} of {STEPS.length}. <code>d</code> is the input bus and <code>q</code> is the
             register, so <code>q</code> always shows what <code>d</code> held one cycle ago.
           </figcaption>
         </figure>

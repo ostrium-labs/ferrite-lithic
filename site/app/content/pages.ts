@@ -16,6 +16,9 @@
  * Both render through the same shell, so a reader cannot tell which is which.
  */
 
+import { DOC_NAV, type DocNavigation } from "./navigation";
+import { CRATES } from "../lib/data";
+
 import { TOOLCHAIN } from "./toolchain";
 import { CORPUS, FINDINGS } from "./corpus";
 import { MDX_SLUGS } from "./paths";
@@ -30,7 +33,9 @@ import HardcamlPage from "../../content/docs/hardcaml.mdx";
 import WhyRust from "../../content/docs/why-rust.mdx";
 import Benchmarks from "../../content/docs/benchmarks.mdx";
 
-export interface DocEntry {
+export interface DocEntry extends Omit<DocNavigation, "label"> {
+  label?: string;
+  source?: string;
   /** The URL segment, and the key into the registry. */
   slug: string;
   title: string;
@@ -40,6 +45,7 @@ export interface DocEntry {
   tests?: number;
   order: number;
   /** Either an MDX component or a typed page. */
+  section: "background" | "crates" | "corpus" | "benchmarks";
   kind: "mdx" | "data";
   Component?: ComponentType<{ components?: typeof mdxComponents }>;
   page?: Page;
@@ -58,6 +64,7 @@ const MDX_PAGES: DocEntry[] = [
     title: "How a circuit becomes a value",
     description: "Combinational and sequential logic, clock edges, bit order, and what equivalence checking actually proves.",
     order: 10,
+    section: "background",
     kind: "mdx",
     Component: Basics,
   },
@@ -66,6 +73,7 @@ const MDX_PAGES: DocEntry[] = [
     title: "OCaml, and the idea of a hardware DSL",
     description: "The three ways to write hardware, what a hardware construction language is, and which OCaml features carry weight.",
     order: 20,
+    section: "background",
     kind: "mdx",
     Component: Ocam,
   },
@@ -74,6 +82,7 @@ const MDX_PAGES: DocEntry[] = [
     title: "Hardcaml, the design being ported",
     description: "Signal.t, Reg_spec, wire and feedback, Cyclesim, ppx interfaces — and the three checks inherited verbatim.",
     order: 30,
+    section: "background",
     kind: "mdx",
     Component: HardcamlPage,
   },
@@ -82,6 +91,7 @@ const MDX_PAGES: DocEntry[] = [
     title: "Why Rust, honestly",
     description: "What the type system does not check, where compile-time width checking was traded away, and what actually verifies the design.",
     order: 40,
+    section: "background",
     kind: "mdx",
     Component: WhyRust,
   },
@@ -94,14 +104,15 @@ function fromData(page: Page, order: number): DocEntry {
     description: page.summary,
     crate: page.crate,
     tier: page.tier === "—" ? undefined : page.tier,
-    tests: page.tests?.total,
+    tests: page.tests?.total ? CRATES.find(crate => crate.name === page.crate)?.tests : undefined,
     order,
+    section: page === CORPUS || page === FINDINGS ? "corpus" : "crates",
     kind: "data",
     page,
   };
 }
 
-export const DOCS: DocEntry[] = [
+const CONTENT: DocEntry[] = [
   ...MDX_PAGES,
   fromData(TOOLCHAIN[0], 110), // bits
   fromData(TOOLCHAIN[1], 120), // ir
@@ -120,10 +131,17 @@ export const DOCS: DocEntry[] = [
     title: "Benchmarks, measured",
     description: "Node counts, flops, bits of state and combinational depth for every design, derived from the IR rather than estimated.",
     order: 220,
+    section: "benchmarks" as const,
     kind: "mdx" as const,
     Component: Benchmarks,
   },
-].sort((a, b) => a.order - b.order);
+];
+
+export const DOCS: DocEntry[] = DOC_NAV.map((navigation, order) => {
+  const content = CONTENT.find(entry => entry.slug === navigation.slug);
+  if (!content) throw new Error(`Missing document: ${navigation.slug}`);
+  return { ...content, ...navigation, order, source: content.crate ? `crates/${content.crate}/src/lib.rs` : `site/content/docs/${navigation.slug}.mdx` };
+});
 
 export const BY_SLUG = new Map(DOCS.map((entry) => [entry.slug, entry]));
 

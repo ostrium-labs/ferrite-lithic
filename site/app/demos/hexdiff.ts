@@ -1,9 +1,9 @@
 /**
- * The FNV-1a offset-basis bug, animated.
+ * The FNV-1a offset-basis bug, shown nibble by nibble.
  *
  * This is the sharpest defect in the project's history and it is worth showing rather
  * than describing: a published constant mistyped by one hex digit, in a test whose own
- * first assertion used the same wrong constant. The animation computes the hash both
+ * first assertion used the same wrong constant. The comparison computes the hash both
  * ways, so the one-digit difference is visible in the answer rather than asserted.
  */
 
@@ -40,6 +40,8 @@ function differingNibble(left: string, right: string): number {
 function nibbleRow(label: string, hex: string, note: string): HTMLElement {
   const row = document.createElement("div");
   row.className = "hexrow";
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", `${label}: ${hex}. ${note}`);
 
   const tag = document.createElement("span");
   tag.className = "hexrow__label";
@@ -50,6 +52,7 @@ function nibbleRow(label: string, hex: string, note: string): HTMLElement {
     const nibble = document.createElement("span");
     nibble.className = "hexnib";
     nibble.textContent = character;
+    nibble.setAttribute("aria-hidden", "true");
     row.append(nibble);
   }
 
@@ -64,6 +67,8 @@ function nibbleRow(label: string, hex: string, note: string): HTMLElement {
 function hashRow(label: string, value: bigint, verdict: string, good: boolean): HTMLElement {
   const row = document.createElement("div");
   row.className = "hexrow";
+  row.setAttribute("role", "group");
+  row.setAttribute("aria-label", `${label}: ${hex16(value)}. ${verdict}`);
 
   const tag = document.createElement("span");
   tag.className = "hexrow__label";
@@ -80,6 +85,7 @@ function hashRow(label: string, value: bigint, verdict: string, good: boolean): 
     nibble.className =
       character === publishedCharacter ? "hexnib" : good ? "hexnib hexnib--fixed" : "hexnib hexnib--diff";
     nibble.textContent = character;
+    nibble.setAttribute("aria-hidden", "true");
     row.append(nibble);
   }
 
@@ -91,7 +97,7 @@ function hashRow(label: string, value: bigint, verdict: string, good: boolean): 
   return row;
 }
 
-export function mountHexDiff(container: HTMLElement): void {
+export function mountHexDiff(container: HTMLElement): () => void {
   const wrongHex = hex16(OFFSET_WRONG);
   const rightHex = hex16(OFFSET_RIGHT);
   const digit = differingNibble(wrongHex, rightHex);
@@ -101,7 +107,7 @@ export function mountHexDiff(container: HTMLElement): void {
     nibbleRow("published", rightHex, "FNV-1a 64 offset basis"),
     hashRow("hash of 'a'", fnv1a([0x61], OFFSET_WRONG), "wrong — no published vector matches", false),
     hashRow("hash of 'a'", fnv1a([0x61], OFFSET_RIGHT), "correct", true),
-    nibbleRow("published vector", hex16(PUBLISHED), "RFC / reference check value"),
+    nibbleRow("published vector", hex16(PUBLISHED), "published reference check value"),
   ];
 
   // Mark the offending digit in the first row and its fix in the second.
@@ -125,4 +131,5 @@ export function mountHexDiff(container: HTMLElement): void {
     "own first assertion repeated the same wrong constant, so the two agreed with " +
     "each other and only the <em>external</em> vectors disagreed.";
   container.append(sweep);
+  return () => container.replaceChildren();
 }

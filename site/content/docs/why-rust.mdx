@@ -65,7 +65,7 @@ Four things, none of them "the compiler proves your hardware is correct":
 let sum = design.add(&a, &b)?;      // Err(WidthMismatch { op: Op::Add, lhs: 8, rhs: 16 })
 let cat = design.cat(&a, &b, 16)?;  // fine: those widths are the point
 ```
-- **No data races, if the corpus ever goes parallel.** 21 designs × 3 checks is comfortable
+- **No data races, if the corpus ever goes parallel.** <ProjectCount name="designs" /> designs × 3 checks is comfortable
   today. Making it hundreds would want parallelism, and `Send`/`Sync` make that a
   compiler-checked property instead of a hope.
 </Step>
@@ -83,7 +83,7 @@ clock edge, when both backends agree everything has settled, with a generated dr
 rather than a hand-written one. A hand-written driver is a second place for the bug to
 live.
 
-**A golden model, in every design.** Each of the 21 corpus designs is a real algorithm,
+**A golden model, in every design.** Each of the <ProjectCount name="designs" /> corpus designs is a real algorithm,
 and each is checked three ways: against the original Rust crate as a golden model,
 through a step testbench where every `await` is one clock edge, and against Verilator.
 

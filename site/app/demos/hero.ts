@@ -21,7 +21,7 @@
  * hero competing with the paragraph under it.
  */
 
-import { logicalSize, onFrame, onVisibility, palette, pause, prepareCanvas, resume } from "../lib/ticker";
+import { palette } from "../lib/ticker";
 
 const MONO = '"IBM Plex Mono", ui-monospace, Menlo, monospace';
 
@@ -54,7 +54,7 @@ export function drawTimingHero(
   const plotWidth = width - PAD.left - PAD.right;
   if (plotWidth < 120) return;
 
-  const CYCLES = 8;
+  const CYCLES = 4;
   const cycleWidth = plotWidth / CYCLES;
 
   /** 0 at the start of the draw, 1 when it is complete. */
@@ -65,9 +65,9 @@ export function drawTimingHero(
 
   const traces: Trace[] = [
     { name: "clk", y: 0.16, height: 0.16, kind: "clock", values: [] },
-    { name: "rst", y: 0.38, height: 0.1, kind: "bus", values: ["0", "0", "1", "1", "0", "0", "0", "0"] },
+    { name: "rst", y: 0.38, height: 0.1, kind: "bus", values: ["1", "0", "0", "0", "0", "0", "0", "0"] },
     { name: "d", y: 0.55, height: 0.12, kind: "bus", values: ["0xa3", "0x1f", "0x1f", "0xc0", "0x5a", "0x5a", "0x07", "0x91"] },
-    { name: "q", y: 0.76, height: 0.12, kind: "bus", values: ["—", "—", "0xa3", "0x1f", "0x1f", "0xc0", "0x5a", "0x5a"] },
+    { name: "q", y: 0.76, height: 0.12, kind: "bus", values: ["0", "0xa3", "0x1f", "0x1f", "0xc0", "0x5a", "0x5a", "0x07"] },
   ];
 
   const top = PAD.top;
@@ -76,7 +76,7 @@ export function drawTimingHero(
   /* ---- the time axis: the grid a timing diagram is read against. */
   context.strokeStyle = palette.lineSoft;
   context.lineWidth = 1;
-  context.font = `11px ${MONO}`;
+  context.font = `18px ${MONO}`;
   context.textBaseline = "alphabetic";
 
   for (let cycle = 0; cycle <= CYCLES; cycle += 1) {
@@ -89,7 +89,7 @@ export function drawTimingHero(
   }
 
   /* ---- trace names, in the left margin, as a datasheet labels its pins. */
-  context.fillStyle = palette.inkFaint;
+  context.fillStyle = palette.inkDim;
   context.textAlign = "right";
   for (const trace of traces) {
     const y = top + trace.y * plotHeight;
@@ -109,7 +109,7 @@ export function drawTimingHero(
   /* ---- the sequential boundary.
     The whole project is the claim that the simulator and the emitted Verilog
     agree about this line, so it is the one annotation the diagram makes. */
-  const edgeX = PAD.left + cycleWidth * 3;
+  const edgeX = PAD.left + cycleWidth * 2;
   if (edgeX < PAD.left + drawn) {
     context.save();
     context.strokeStyle = palette.accent;
@@ -123,14 +123,14 @@ export function drawTimingHero(
 
     context.fillStyle = palette.accent;
     context.textAlign = "left";
-    context.fillText("posedge: the only place state changes", edgeX + 7, top - 26);
+    context.fillText("posedge / state changes", edgeX + 7, top - 26);
   }
 
   /* ---- the measurement bracket: t_setup, drawn the way a datasheet draws it,
     with witness lines and arrows. This is the annotation that says "these two
     things are related", which is the entire subject of the equivalence check. */
   const bracketY = top + plotHeight + 34;
-  const from = PAD.left + cycleWidth * 2;
+  const from = PAD.left + cycleWidth;
   const to = edgeX;
   if (to < PAD.left + drawn) {
     context.strokeStyle = palette.inkDim;
@@ -169,7 +169,7 @@ export function drawTimingHero(
 
   /* ---- axis labels, in the signal colour: the only other place the accent
     appears in the diagram, because these are the reader's coordinates. */
-  context.fillStyle = palette.inkFaint;
+  context.fillStyle = palette.inkDim;
   context.textAlign = "center";
   for (let cycle = 0; cycle <= CYCLES; cycle += 1) {
     const x = PAD.left + cycle * cycleWidth;
@@ -230,11 +230,11 @@ function drawBus(
   const startX = PAD.left;
   const limit = startX + drawn;
 
-  context.font = `12px ${MONO}`;
+  context.font = `18px ${MONO}`;
   context.textBaseline = "middle";
   context.textAlign = "center";
 
-  for (let cycle = 0; cycle < trace.values.length; cycle += 1) {
+  for (let cycle = 0; cycle < Math.min(4, trace.values.length); cycle += 1) {
     const cellX = startX + cycle * cycleWidth;
     if (cellX > limit) break;
 
@@ -260,38 +260,8 @@ function drawBus(
     // The value only appears once its cell is wide enough to hold it, so text
     // never spills out of a cell that is still being drawn.
     if (cellWidth > 26) {
-      context.fillStyle = isHold ? palette.inkFaint : palette.ink;
+      context.fillStyle = isHold ? palette.inkDim : palette.ink;
       context.fillText(value, cellX + (cellWidth - 1) / 2, y + height / 2 + 0.5);
     }
   }
 }
-
-/**
- * Mounts the hero. It runs once and then holds — `paused` stops the shared
- * animation loop from ever being asked to draw it again.
- */
-export function mountTimingHero(canvas: HTMLCanvasElement): void {
-  if (!canvas) return;
-  let settled = false;
-
-  // Drawn in the canvas's own logical space, exactly like every other diagram, so the
-  // hero does not need its own scaling story.
-  const render = (elapsed: number): void => {
-    const context = prepareCanvas(canvas);
-    if (!context) return;
-    const size = logicalSize(canvas);
-    drawTimingHero(context, size.width, size.height, elapsed);
-    if (elapsed >= DURATION) settled = true;
-  };
-
-  onFrame(canvas, render);
-  onVisibility(
-    canvas,
-    () => {
-      if (!settled) resume(canvas);
-    },
-    () => pause(canvas),
-  );
-  render(0);
-}
-

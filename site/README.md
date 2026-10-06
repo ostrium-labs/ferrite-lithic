@@ -6,7 +6,7 @@ in Rust, with a corpus of twenty-one real algorithms that are each checked three
 ## What it is
 
 A [React Router 8](https://reactrouter.com) app in framework mode, with
-[`fumadocs-mdx`](https://fumadocs.dev) as the content layer. Three routes own fifteen
+[`fumadocs-mdx`](https://fumadocs.dev) as the content layer. Three route patterns own sixteen
 documentation pages plus the landing page.
 
 ```
@@ -26,8 +26,10 @@ Shiki at build time. The layout, the design system and the components are ours, 
 | Background | `content/docs/*.mdx` | MDX + `app/components/mdx.tsx` | Prose, and Shiki highlights fenced code at build time so a broken fence fails the build |
 | Crate walkthroughs | `app/content/*.ts` | `app/components/DocShell.tsx` | The step/figure/notes structure is worth having checked by the compiler rather than trusted to prose |
 
-`app/content/pages.ts` is the single registry: it decides what exists, what order it is
-read in, and what the sidebar shows. Adding a page means adding a file and one entry.
+`app/content/navigation.ts` owns the document order, labels, groups and prerequisites.
+`app/content/pages.ts` joins that metadata to typed content and compiled MDX.
+`app/lib/data.ts` owns crate dependencies and recorded project counts;
+`app/lib/benchmarks.ts` owns the paired speed measurements.
 
 ## The design system
 
@@ -61,8 +63,8 @@ npm run typecheck  # react-router typegen && tsc
 The build prerenders the landing page, documentation index, and every documentation
 slug into `build/client`. `wrangler.jsonc` deploys these as static assets to the
 `ferrite` Worker; no runtime server is required. Documentation paths are shared with
-the page registry in `app/content/paths.ts`. Add new MDX slugs there as well as their
-registry entries; crate walkthrough paths come from the typed page objects.
+the canonical navigation in `app/content/navigation.ts`, via `app/content/paths.ts`.
+Add new documents to that navigation and the content registry.
 
 Connect `ostrium-labs/ferrite-lithic` in Cloudflare Workers Builds with:
 
@@ -92,18 +94,31 @@ Settings → Domains & Routes → Add → Custom Domain in Cloudflare.
 
 ## Verifying
 
-`verify.mjs` drives a real browser over every route and asserts the things that are easy to
-break silently: that each page renders content, that the sidebar marks the current page,
-that the prev/next chain reaches all fifteen pages, that Shiki actually ran on the MDX
-pages, that the hero timing diagram draws once and then holds, that the scrolling demos
-animate only while on screen, and that both typefaces are applied.
+Run `npm run typecheck`, `npm test` and `npm run build`. Preview the production assets
+with `npm run preview -- --port 4174`; this uses Cloudflare's local static-asset routing,
+including nested prerendered pages. No deployment is performed.
+
+The browser scripts use an installed Chrome by default. Set `BROWSER_EXECUTABLE` to
+another Chromium executable and `SITE_BASE_URL` to the running preview (default
+`http://127.0.0.1:5173`). Run from `site/`:
 
 ```sh
-npm run dev &
-node verify.mjs     # exits non-zero on any failure
+node verify.mjs                 # routes, console, reading order, fonts and live demos
+node verify-layout.mjs          # all 18 routes at 17 widths; screenshots at five widths
+node verify-accessibility.mjs   # axe WCAG A/AA checks at 375 and 1440px
+node verify-interactions.mjs    # keyboard, copy, SPA, controls, motion and reflow
+node verify-lifecycle.mjs       # observer counts across repeated SPA mount/unmount
+node verify-browsers.mjs        # installed Edge, Playwright Firefox and WebKit
+node shoot.mjs                  # chapter screenshots at five widths
 ```
 
-It needs a Chromium binary. The path is hard-coded to the locally installed Playwright
-build and overridable with `CHROME=/path/to/chrome`.
+Set `SKIP_SCREENSHOTS=1` to make the layout matrix verification-only. Browser artifacts
+are saved under ignored `.artifacts/pass-two/`. Tests exit nonzero on failed assertions;
+missing optional browser engines are reported as failures rather than claimed as tested.
+See [the second-pass design report](design-pass-two.md) for decisions and limitations.
 
-`shoot.mjs` takes screenshots for design review: `node shoot.mjs "/=landing" "/docs=docs"`.
+## Verified Edge identity
+
+The SVG geometry, component APIs, deterministic export commands, asset inventory and
+validation notes are documented in [BRAND.md](BRAND.md). Run `node verify-brand.mjs`
+against the local preview for responsive lockups, icon requests and finite/reduced motion.

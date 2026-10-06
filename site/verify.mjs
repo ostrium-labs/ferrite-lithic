@@ -1,7 +1,7 @@
 import { chromium } from "playwright-core";
 
-const EXECUTABLE = "/home/keshav/.cache/ms-playwright/chromium-1208/chrome-linux64/chrome";
-const BASE = "http://localhost:5173";
+const EXECUTABLE = process.env.BROWSER_EXECUTABLE || "C:/Program Files/Google/Chrome/Application/chrome.exe";
+const BASE = process.env.SITE_BASE_URL || "http://127.0.0.1:5173";
 
 const ROUTES = [
   "/", "/docs",

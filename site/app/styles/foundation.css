@@ -1,0 +1,47 @@
+/* Text and interaction primitives shared by the landing page and manual. */
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: var(--sticky-offset); }
+body { isolation: isolate; position: relative; margin: 0; background: var(--paper); color: var(--ink); font-family: var(--face-text); font-size: var(--t-body); line-height: var(--lh-body); font-synthesis-weight: none; -webkit-font-smoothing: antialiased; }
+body::before { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: -1; background-image: radial-gradient(circle at 1px 1px, var(--grid) 1px, transparent 0); background-size: 8px 8px; }
+h1,h2,h3,h4 { margin: 0; line-height: var(--lh-tight); letter-spacing: -.025em; font-weight: 640; text-wrap: balance; }
+p { margin: 0 0 var(--s-4); }
+p:last-child { margin-bottom: 0; }
+a { color: var(--signal); text-underline-offset: .2em; text-decoration-thickness: 1px; }
+a:hover { color: var(--ink); }
+button,summary { -webkit-tap-highlight-color: transparent; }
+button { color: inherit; font: inherit; cursor: pointer; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 4px; }
+#main:focus { outline: none; }
+::selection { background: var(--signal-wash); color: var(--ink); }
+strong { font-weight: 650; color: var(--ink); }
+img,canvas,svg { display: block; max-width: 100%; }
+code { font-family: var(--face-data); font-size: .875em; background: color-mix(in oklab, var(--ink) 6%, transparent); padding: .12em .3em; border-radius: var(--r-control); box-decoration-break: clone; overflow-wrap: anywhere; }
+pre { margin: var(--s-4) 0; padding: var(--s-5); background: var(--paper-raised); border: 1px solid var(--rule); border-radius: var(--r-control); overflow-x: auto; font-family: var(--face-data); font-size: .875rem; line-height: var(--lh-code); tab-size: 4; }
+pre code { font-size: inherit; padding: 0; background: none; overflow-wrap: normal; }
+.prose,.lede { max-width: var(--measure); color: var(--ink-soft); }
+.lede { font-size: var(--t-lede); line-height: 1.6; }
+.prose p { max-width: var(--measure); }
+.data-label,.eyebrow { font-family: var(--face-data); font-size: var(--t-micro); color: var(--ink-soft); }
+.eyebrow { color: var(--signal); }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.cta-button { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: .75rem 1rem; border: 1px solid var(--rule-strong); border-radius: var(--r-control); color: var(--ink); font-size: var(--t-body-sm); font-weight: 550; text-decoration: none; }
+.cta-button:hover,.cta-button:active { background: var(--signal-wash); border-color: var(--signal); color: var(--signal); }
+.cta-button--primary { background: var(--ink); border-color: var(--ink); color: var(--paper-raised); }
+.cta-button--primary:hover { background: var(--signal); color: var(--paper-raised); }
+figcaption { font-size: var(--t-small); line-height: 1.55; color: var(--ink-soft); }
+.tok-k { color: var(--ink); font-weight: 600; }
+.tok-f { color: var(--signal); }
+.tok-c { color: var(--ink-soft); }
+.tok-str { color: var(--ink); }
+.table-wrap { margin-block: var(--s-5); max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; }
+table.compare { width: 100%; border-collapse: collapse; font-size: var(--t-small); }
+table.compare caption { text-align: left; color: var(--ink-soft); padding-bottom: .75rem; }
+table.compare th,table.compare td { text-align: left; vertical-align: top; padding: .75rem 1rem .75rem 0; border-bottom: 1px solid var(--rule); }
+table.compare thead th { font-family: var(--face-data); font-size: var(--t-micro); font-weight: 500; border-bottom-color: var(--rule-strong); }
+table.compare tbody th { color: var(--ink); font-weight: 550; }
+table.compare td { color: var(--ink-soft); }
+table.compare--numeric td:nth-child(n+3):nth-child(-n+5) { text-align: right; font-family: var(--face-data); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } *,*::before,*::after { animation: none !important; transition: none !important; } }
+@media (max-width: 430px) { pre { padding: 1rem; } }
+@media print { body { background: white; color: black; } body::before { display: none; } a { color: black; } pre { white-space: pre-wrap; } }

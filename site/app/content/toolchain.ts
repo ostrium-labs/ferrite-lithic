@@ -7,6 +7,8 @@
  * was measured says so, and a figure that is merely asserted does not get to.
  */
 
+import { CRATES } from "../lib/data";
+
 import type { Page } from "./types";
 
 export const TOOLCHAIN: Page[] = [
@@ -106,7 +108,7 @@ assert!(a.udiv(&zero).is_err());`,
         body: "The host-side representation is `u64` words, so a design wider than the host can hold bits in is not buildable. Nothing in the corpus needs it, and the limit is recorded rather than hidden.",
       },
     ],
-    tests: { total: 96, breakdown: "unit, errors, exhaustive small widths, properties, width sweep" },
+    tests: { total: CRATES.find(crate => crate.doc === "bits")!.tests, breakdown: "unit, errors, exhaustive small widths, properties, width sweep" },
   },
 
   {
@@ -185,7 +187,7 @@ let mux  = c.ite(cmp, a, b)?;`,
         body: "A tree-shaped IR would make construction easy and every consumer awkward. The flat arena makes construction slightly more explicit and traversal trivial, and traversal is what both backends do constantly.",
       },
     ],
-    tests: { total: 116, breakdown: "the largest suite in the workspace — the IR is what everything else is built on" },
+    tests: { total: CRATES.find(crate => crate.doc === "ir")!.tests, breakdown: "the largest suite in the workspace — the IR is what everything else is built on" },
   },
 
   {
@@ -262,7 +264,7 @@ let square = design.rom(&addr, &table, 8)?;`,
         body: "`Design::node_count` is what the corpus uses to compare designs, and a `case_`-based table is dramatically larger than the equivalent RAM would be. AES's S-box is 200 duplicated 256-entry arms for exactly this reason.",
       },
     ],
-    tests: { total: 58, breakdown: "builder, operators, structural — the operator table is checked exhaustively at small widths" },
+    tests: { total: CRATES.find(crate => crate.doc === "design")!.tests, breakdown: "builder, operators, structural — the operator table is checked exhaustively at small widths" },
   },
 
   {
@@ -321,7 +323,7 @@ for update in updates {
         body: "A `Bits` handed to `set_input` must match the port's width or the call errors. Silent zero-extension here would be a bug that only appears on one backend.",
       },
     ],
-    tests: { total: 52, breakdown: "including 11 doctests, several of which are the README's examples" },
+    tests: { total: CRATES.find(crate => crate.doc === "sim")!.tests, breakdown: "including 11 doctests, several of which are the README's examples" },
   },
 
   {
@@ -378,7 +380,7 @@ let module = Module::new(
         body: "`cargo test` works without it and prints what it skipped. CI installs it and then fails if anything skipped — because a green run in which every equivalence test took its skip path is green and meaningless.",
       },
     ],
-    tests: { total: 52, breakdown: "emission, signature, and an Icarus-gated check that the generated Verilog compiles" },
+    tests: { total: CRATES.find(crate => crate.doc === "rtl")!.tests, breakdown: "emission, signature, and an Icarus-gated check that the generated Verilog compiles" },
   },
 
   {
@@ -431,7 +433,7 @@ inputs.count;   // a Signal, already wired to the port`,
         body: "A field with no `#[bits]` is a single bit. This is the right default — most control signals are one bit — but it means a forgotten attribute produces a one-bit port rather than a compile error.",
       },
     ],
-    tests: { total: 39, breakdown: "the macro's own expansion, error cases, and 1 doctest" },
+    tests: { total: CRATES.find(crate => crate.doc === "derive")!.tests, breakdown: "the macro's own expansion, error cases, and 1 doctest" },
   },
 
   {
@@ -489,7 +491,7 @@ wave.register(&port, "count")?;`,
         body: "A gap in cycle numbers is a gap, not a shift. A design that stops clocking produces a short series and a failing assertion rather than a silently compressed one.",
       },
     ],
-    tests: { total: 42, breakdown: "data, assertion, mismatch reporting, VCD output" },
+    tests: { total: CRATES.find(crate => crate.doc === "wave")!.tests, breakdown: "data, assertion, mismatch reporting, VCD output" },
   },
 
   {
@@ -558,7 +560,7 @@ assert_eq!(out.first(), Some(&Bits::constant(72, 9)?));`,
         body: "A testbench that reads like a list of clock edges in the order they happen is easier to check against a design than one built from nested callbacks. The `.await` is the clock edge and nothing else is.",
       },
     ],
-    tests: { total: 17, breakdown: "the smallest crate, and the one whose contract is easiest to get subtly wrong" },
+    tests: { total: CRATES.find(crate => crate.doc === "tb")!.tests, breakdown: "the smallest crate, and the one whose contract is easiest to get subtly wrong" },
   },
 
   {
@@ -637,6 +639,6 @@ assert!(
         body: "With no Verilator installed the test prints `SKIPPED` and passes. CI installs Verilator and fails if anything skipped, so a green CI run means the equivalence actually ran.",
       },
     ],
-    tests: { total: 33, breakdown: "plan derivation, stimulus encoding, harness lifecycle, and real Verilator equivalence" },
+    tests: { total: CRATES.find(crate => crate.doc === "cosim")!.tests, breakdown: "plan derivation, stimulus encoding, harness lifecycle, and real Verilator equivalence" },
   },
 ];

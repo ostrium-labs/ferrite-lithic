@@ -1,0 +1,20 @@
+/* Verified Edge shares the site's semantic colors; no brand-only theme detection. */
+.ferrite-mark { color: var(--ink); flex: none; width: var(--mark-size); height: var(--mark-size); overflow: visible; }
+.ferrite-mark__input,.ferrite-mark__upper { fill: var(--signal); }
+.ferrite-mark--inverse { color: var(--paper); }
+.ferrite-mark--inverse .ferrite-mark__input,.ferrite-mark--inverse .ferrite-mark__upper { fill: var(--instrument-signal); }
+.ferrite-mark--mono .ferrite-mark__input,.ferrite-mark--mono .ferrite-mark__upper { fill: currentColor; }
+.ferrite-logo { display: inline-flex; align-items: center; gap: .7em; font-family: var(--face-data); line-height: 1; color: inherit; }
+.ferrite-logo--inverse { color: var(--paper); }
+.ferrite-logo__wordmark { white-space: nowrap; transform: translateY(-.025em); }
+.ferrite-logo--stacked { flex-direction: column; gap: .65em; }
+.hero__identity { display: inline-flex; align-items: center; gap: .7em; font-family: var(--face-data); color: var(--ink); }
+.ferrite-mark--animated .ferrite-mark__input { animation: edge-input 720ms ease-out both; }
+.ferrite-mark--animated .ferrite-mark__branch { animation: edge-clock 720ms ease-out both; }
+.ferrite-mark--animated .ferrite-mark__upper { animation: edge-sim 720ms ease-out both; }
+.ferrite-mark--animated .ferrite-mark__lower { animation: edge-rtl 720ms ease-out both; }
+@keyframes edge-input { 0%,15% { fill: var(--ink-soft); } 30%,100% { fill: var(--signal); } }
+@keyframes edge-clock { 0%,30% { stroke: var(--ink-soft); } 42%,52% { stroke: var(--signal); } 65%,100% { stroke: currentColor; } }
+@keyframes edge-sim { 0%,45% { fill: var(--ink-soft); } 65%,100% { fill: var(--signal); } }
+@keyframes edge-rtl { 0%,65% { fill: var(--ink-soft); } 80%,90% { fill: var(--signal); } 100% { fill: currentColor; } }
+@media (prefers-reduced-motion: reduce) { .ferrite-mark--animated * { animation: none; } }

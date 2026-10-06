@@ -1,3 +1,4 @@
+import { FerriteLogo } from "./brand/FerriteLogo";
 /**
  * The persistent site header.
  *
@@ -10,7 +11,11 @@
  * learns the bar once never has to think about it again.
  */
 
-import { Link, NavLink } from "react-router";
+import { useEffect, useRef } from "react";
+import { DOC_NAV } from "../content/navigation";
+import { PROJECT_STATS } from "../lib/data";
+
+import { Link } from "react-router";
 
 /**
  * The sections, in reading order.
@@ -21,20 +26,9 @@ import { Link, NavLink } from "react-router";
  * registry order, and `SECTION_OF` is the single place that mapping lives.
  */
 
-const CRATE_SLUGS = ["bits", "ir", "design", "sim", "rtl", "derive", "wave", "cosim", "tb"];
-const BACKGROUND_SLUGS = ["basics", "ocaml", "hardcaml", "why-rust"];
-
-/** Which section a documentation page belongs to. Returns null for `/` and `/docs`. */
-function sectionFor(pathname: string): "background" | "crates" | "corpus" | "benchmarks" | null {
-  const slug = pathname.replace(/^\/docs\/?/, "").replace(/\/$/, "");
-  if (slug === "") return null;
-  if (slug === "benchmarks") return "benchmarks";
-  if (slug === "corpus" || slug === "findings") return "corpus";
-  if (CRATE_SLUGS.includes(slug)) return "crates";
-  if (BACKGROUND_SLUGS.includes(slug)) return "background";
-  // An unregistered slug: fall back to the reading order's first section rather than
-  // leaving the bar blank, so the reader always has somewhere to go back to.
-  return "background";
+function sectionFor(pathname: string) {
+  if (!pathname.startsWith("/docs/")) return null;
+  return DOC_NAV.find(entry => entry.slug === pathname.replace(/^\/docs\//, "").replace(/\/$/, ""))?.section ?? null;
 }
 
 const SECTIONS = [
@@ -51,12 +45,21 @@ function isDocsIndex(pathname: string): boolean {
 }
 
 export function SiteHeader({ pathname }: { pathname: string }) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const header = ref.current;
+    if (!header) return;
+    const observer = new ResizeObserver(() => {
+      document.documentElement.style.setProperty("--sitebar-height", `${header.getBoundingClientRect().height}px`);
+    });
+    observer.observe(header);
+    return () => { observer.disconnect(); document.documentElement.style.removeProperty("--sitebar-height"); };
+  }, []);
   return (
-    <header className="sitebar">
+    <header className="sitebar" ref={ref}>
       <div className="sitebar__inner">
-        <Link className="sitebar__wordmark" to="/">
-          <span className="sitebar__mark" aria-hidden="true" />
-          ferrite-lithic
+        <Link className="sitebar__wordmark" to="/" aria-label="Ferrite Lithic">
+          <FerriteLogo />
         </Link>
 
         <nav className="sitebar__nav" aria-label="Sections">
@@ -65,21 +68,21 @@ export function SiteHeader({ pathname }: { pathname: string }) {
             // highlighting one of its children while standing on it would be a lie.
             const active = !isDocsIndex(pathname) && section.current(pathname);
             return (
-              <NavLink
+              <Link
                 key={section.to}
                 to={section.to}
                 className={`sitebar__link${active ? " is-current" : ""}`}
                 aria-current={active ? "page" : undefined}
               >
                 {section.label}
-              </NavLink>
+              </Link>
             );
           })}
         </nav>
 
         {/* The one number that is not a link, because it is a fact about the repo rather
             than a place to go. */}
-        <span className="sitebar__meta">811 tests · 21 designs</span>
+        <span className="sitebar__meta">{PROJECT_STATS.tests} tests · {PROJECT_STATS.designs} designs</span>
       </div>
     </header>
   );

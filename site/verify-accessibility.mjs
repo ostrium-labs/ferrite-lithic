@@ -1,0 +1,7 @@
+import {chromium} from 'playwright-core';
+import AxeBuilder from '@axe-core/playwright';
+import {readFile,writeFile,mkdir} from 'node:fs/promises';
+const routes=['/','/docs',...Array.from((await readFile('app/content/navigation.ts','utf8')).matchAll(/slug: "([^"]+)"/g),m=>'/docs/'+m[1])];
+const browser=await chromium.launch({executablePath:process.env.BROWSER_EXECUTABLE||'C:/Program Files/Google/Chrome/Application/chrome.exe'});
+const failures=[];const records=[];
+try{for(const width of [375,1440]){const context=await browser.newContext({viewport:{width,height:900},reducedMotion:'reduce',permissions:['clipboard-read','clipboard-write']});const page=await context.newPage();for(const route of routes){await page.goto((process.env.SITE_BASE_URL||'http://127.0.0.1:5173')+route);const result=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa','wcag22aa']).analyze();records.push({width,route,violations:result.violations.map(v=>({id:v.id,impact:v.impact,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))}))});if(result.violations.length)failures.push(records.at(-1));}await context.close();console.log(`${width}px accessibility checked`);}await mkdir('.artifacts/pass-two',{recursive:true});await writeFile('.artifacts/pass-two/accessibility.json',JSON.stringify(records,null,2));if(failures.length)throw Error(JSON.stringify(failures));console.log('36 route/viewport accessibility scans passed');}finally{await browser.close();}

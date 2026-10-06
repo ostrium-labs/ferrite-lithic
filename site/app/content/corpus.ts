@@ -6,6 +6,8 @@
  * catalogue, which is the part worth reading twice.
  */
 
+import { CRATES, PROJECT_STATS } from "../lib/data";
+
 import type { Page } from "./types";
 
 export const CORPUS: Page = {
@@ -14,7 +16,7 @@ export const CORPUS: Page = {
   crate: "ferrite-lithic-corpus",
   tier: "—",
   summary:
-    "Twenty-one real algorithms written the way hardware would want them, each checked three ways.",
+    `${PROJECT_STATS.designs} real algorithms written the way hardware would want them, each checked ${PROJECT_STATS.checksPerDesign} ways.`,
   lede: [
     "Every other crate in the workspace is a tool, and a tool gets tested with inputs chosen by whoever wrote it — so its tests drift toward what the tool was built to do. A corpus entry is a real algorithm written the way hardware would want it, checked three ways: against the original crate as the golden model, through the step testbench, and against Verilator by compiling the emitted Verilog and comparing cycle by cycle.",
     "The golden model is never a second implementation by the same hand. Where the original crate is unavailable the entry says so on its own docs and states what stands in for it, because a self-consistent round trip proves the design is self-consistent and nothing else.",
@@ -24,7 +26,7 @@ export const CORPUS: Page = {
       title: "Tier 1 — LFSRs and checksums",
       detail:
         "The cheapest designs with a register and a bit stream, and the ones that find toolchain bugs first. `crc3` is three flops and two conditional XORs consuming one byte per cycle; `crc32` is 32 of them. `ghash` is the most ASIC-shaped thing in the corpus: a CPU does it with carryless multiply over limbs, and the hardware is 128 cycles of a register and two conditional XORs.",
-      figure: { value: "4", unit: "entries", caption: "crc3, crc32, lfsr, ghash — and crc32fast's 8 kB lookup is the cost hardware does not pay" },
+      figure: { value: "3", unit: "designs + shared recurrence", caption: "crc3, crc32, ghash; lfsr is their shared recurrence — and crc32fast's 8 kB lookup is the cost hardware does not pay" },
     },
     {
       title: "Tier 2 — block ciphers",
@@ -87,7 +89,7 @@ export const CORPUS: Page = {
       body: "Where a real crate exists it is used. Where none does — FSE has no golden crate in this workspace at all — the entry states the ceiling of its own evidence rather than implying more.",
     },
   ],
-  tests: { total: 305, breakdown: "unit tests over table construction, plus fifteen integration targets, each with a Verilator equivalence check" },
+  tests: { total: CRATES.find(crate => crate.doc === "corpus")!.tests, breakdown: "unit tests over table construction, plus fifteen integration targets, each with a Verilator equivalence check" },
 };
 
 export const FINDINGS: Page = {
@@ -183,7 +185,7 @@ if len as u32 != (!nlen as u32 & 0xffff) { return None; }`,
   notes: [
     {
       kind: "measured",
-      title: "811 tests, and the corpus still found the bugs",
+      title: `${PROJECT_STATS.tests} tests, and the corpus still found the bugs`,
       body: "The tool crates' own tests are not bad; they were aimed at the wrong things. The change that found the last nine defects was not more tests. It was writing a design that has an answer somewhere outside this repository.",
     },
     {

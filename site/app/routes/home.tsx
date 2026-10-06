@@ -1,3 +1,4 @@
+import { FerriteAnimatedMark } from "../components/brand/FerriteAnimatedMark";
 /**
  * The landing page.
  *
@@ -10,9 +11,15 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
-import { useCanvas, useCountUp, useOnceCanvas } from "../components/canvas";
+import { useCanvas, useOnceCanvas } from "../components/canvas";
+import { Instrument } from "../components/Instrument";
+import { CodeBlock } from "../components/CodeBlock";
+import { CrateArchitecture } from "../components/CrateArchitecture";
+import { VerificationLoop } from "../components/VerificationLoop";
+import { SOURCE_ROOT } from "../content/navigation";
+import { BenchmarkFigure } from "../components/BenchmarkFigure";
 import { CycleWalk } from "../components/CycleWalk";
-import { CRATES, TIERS } from "../lib/data";
+import { TIERS, PROJECT_STATS } from "../lib/data";
 import { drawTimingHero } from "../demos/hero";
 import { drawPipeline } from "../demos/pipeline";
 import { drawBitStream, drawHuffman } from "../demos/bitdemos";
@@ -27,7 +34,7 @@ export function meta() {
     {
       name: "description",
       content:
-        "An embedded hardware DSL, a cycle simulator and a Verilog emitter, written in Rust. Hardcaml's model, reimplemented natively. A corpus of twenty-one real algorithms, each checked three ways.",
+        "An embedded hardware DSL, a cycle simulator and a Verilog emitter, written in Rust. Hardcaml's model, reimplemented natively. A corpus of independently checked algorithms, each checked three ways.",
     },
   ];
 }
@@ -45,27 +52,23 @@ function Stat({
   suffix?: string;
   note: string;
 }) {
-  const ref = useCountUp(value);
   return (
     <div className="stat">
       <dt>{label}</dt>
       <dd>
-        <span ref={ref}>{value}</span>
+        <span>{value}</span>
         {suffix}
+        <p>{note}</p>
       </dd>
-      <p>{note}</p>
     </div>
   );
 }
 
 /** Renders a code sample with the same four-token highlighting the design uses elsewhere. */
 function Code({ source }: { source: string }) {
-  const escape = (text: string): string =>
-    text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-  const tokens = escape(source).split("\n");
+  const tokens = source.split("\n");
   return (
-    <pre>
+    <pre tabIndex={0}>
       {tokens.map((line, index) => {
         const comment = line.includes("//") ? line.indexOf("//") : -1;
         const code = comment >= 0 ? line.slice(0, comment) : line;
@@ -106,47 +109,41 @@ function highlight(code: string) {
 }
 
 function Hero() {
-  const ref = useOnceCanvas(HERO_DURATION, drawTimingHero);
-  return (
-    <figure className="hero__diagram">
-      <canvas
-        ref={ref}
-        id="timing-hero"
-        width={1160}
-        height={440}
-        role="img"
-        aria-label="A timing diagram: a clock with a rising edge each cycle, a reset that pulses, an input bus d, and an output bus q that takes d's previous value on each rising edge. A dashed line marks the rising edge, labelled as the only place state changes, and a bracket measures t_setup from the third cycle's boundary to that edge."
-      />
-      <figcaption>
-        One graph, two backends, one clock. The simulator and the emitted Verilog are
-        compared at exactly this edge, on every corpus design, cycle by cycle.
-      </figcaption>
-    </figure>
-  );
+  const [replay, setReplay] = useState(0);
+  const ref = useOnceCanvas(HERO_DURATION, drawTimingHero, replay);
+  return <figure className="hero__diagram">
+    <Instrument title="Register timing / illustrative trace" description="Scrollable register timing diagram" compact controls={<button type="button" onClick={() => setReplay(value => value + 1)}>Replay trace</button>}>
+      <canvas ref={ref} id="timing-hero" width={720} height={360} role="img" aria-label="Illustrative register trace: reset clears q at the first edge. On subsequent rising clock edges, q takes d's previous value. A witness bracket marks the setup interval before the third edge." />
+    </Instrument>
+    <div className="hero__contract"><Link to="/docs/ir">One graph</Link><span aria-hidden="true">→</span><Link to="/docs/sim">Simulator</Link><span aria-hidden="true">⇄</span><Link to="/docs/cosim">Emitted RTL / Verilator</Link></div>
+    <figcaption>One clock. The same stimulus. Compare the outputs at every edge.</figcaption>
+  </figure>;
 }
 
 /* --------------------------------------------------------------- the canvas demos */
 
 function Pipeline() {
-  const ref = useCanvas(drawPipeline);
-  return (
-    <figure className="pipeline">
-      <canvas ref={ref} id="pipeline-canvas" width={1200} height={420} />
-      <figcaption>
-        The builder produces one graph. Both backends consume it, and <code>Plan</code>{" "}
-        holds the stimulus and the column set that make the two comparable at all —
-        without it the comparison is not between two machines but between two different
-        experiments.
-      </figcaption>
-    </figure>
-  );
+  const [paused, setPaused] = useState(false);
+  const [selected, setSelected] = useState<number | null>(null);
+  const ref = useCanvas((context, width, height, elapsed) => drawPipeline(context, width, height, elapsed, selected), paused);
+  const stages = ["Rust builder", "Design / IR", "Simulator", "RTL emitter", "Sim output", "Verilator output", "Plan + stimulus", "Compare"];
+  return <figure className="pipeline">
+    <Instrument title="Construction → execution → comparison" description="Scrollable Ferrite architecture diagram" controls={<button type="button" onClick={() => setPaused(value => !value)} aria-pressed={paused}>{paused ? "Resume signal" : "Pause signal"}</button>}>
+      <canvas ref={ref} id="pipeline-canvas" width={1200} height={300} role="img" aria-label="Rust builds one Design graph. The simulator executes it; the RTL emitter produces Verilog run by Verilator. A Plan selects matching columns and stimulus. The comparison reports agreement or the first differing cycle." />
+    </Instrument>
+    <div className="pipeline__stages" aria-label="Trace a stage’s downstream path">{stages.map((stage, index) => <button type="button" key={stage} aria-pressed={selected === index} onMouseEnter={() => setSelected(index)} onFocus={() => setSelected(index)} onClick={() => setSelected(selected === index ? null : index)}>{stage}</button>)}</div>
+    <figcaption>Inspect a stage to trace its downstream path. <code>Plan</code> chooses the columns; identical stimulus makes the two runs comparable. This is an architectural illustration, not a live verification run.</figcaption>
+  </figure>;
 }
 
 function BitStream() {
-  const ref = useCanvas(drawBitStream);
+  const [paused, setPaused] = useState(false);
+  const ref = useCanvas(drawBitStream, paused);
   return (
     <>
-      <canvas ref={ref} id="bitstream-canvas" width={1100} height={300} />
+      <Instrument title="DEFLATE / bit order" description="Scrollable least-significant-bit-first explanation" controls={<button type="button" onClick={() => setPaused(value => !value)} aria-pressed={paused}>{paused ? "Resume" : "Pause"}</button>}>
+      <canvas ref={ref} id="bitstream-canvas" role="img" aria-label="DEFLATE emits the bits of each byte in increasing bit order, starting at bit zero." width={1100} height={300} />
+      </Instrument>
       <div className="demo__foot">
         Bit 0 of each byte goes first, then bit 1, up to bit 7, then the next byte's bit
         0. Watch the marker: nine cycles per byte, because this design will not load a byte
@@ -157,10 +154,13 @@ function BitStream() {
 }
 
 function Huffman() {
-  const ref = useCanvas(drawHuffman);
+  const [paused, setPaused] = useState(false);
+  const ref = useCanvas(drawHuffman, paused);
   return (
     <>
-      <canvas ref={ref} id="huffman-canvas" width={1100} height={320} />
+      <Instrument title="Huffman / decode lookup" description="Scrollable nine-bit Huffman lookup" controls={<button type="button" onClick={() => setPaused(value => !value)} aria-pressed={paused}>{paused ? "Resume" : "Pause"}</button>}>
+      <canvas ref={ref} id="huffman-canvas" role="img" aria-label="Nine incoming bits are reversed into a Huffman table index to retrieve a symbol and its code length." width={1100} height={340} />
+      </Instrument>
       <div className="demo__foot">
         The reversal is a wire permutation and costs no gates in silicon. Here it is nine
         one-bit selects, because the DSL has no way to say "the same bits, in the other
@@ -196,47 +196,26 @@ function Mux() {
 export default function Home() {
   return (
     <>
-      <header className="hero">
-        <div className="hero__inner">
-          <p className="eyebrow">ferrite-lithic</p>
-          <h1 className="hero__title">
-            Hardware you write
-            <br />
-            <span className="accent">in Rust</span>, as{" "}
-            <span className="accent accent--alt">real gates</span>.
-          </h1>
-
-          <Hero />
-
-          <p className="lede">
-            An embedded hardware DSL, a cycle simulator and a Verilog emitter. Hardcaml's
-            model, reimplemented natively — not a wrapper, not a binding, not a
-            transpiler. A Rust library you call from Rust, and the only way to know it
-            works is a corpus of twenty-one real algorithms checked three ways.
-          </p>
-
-          <dl className="stats">
-            <Stat label="tests" value={810} note="753 unit and integration, 57 doctests" />
-            <Stat label="verified designs" value={21} note="in seven tiers, each checked three ways" />
-            <Stat label="crates" value={10} note="nine tools and one corpus" />
-            <Stat label="Verilator" value={100} suffix="%" note="of designs cosimulated cycle by cycle" />
-          </dl>
-
-          <div className="landing-cta">
-            <Link className="cta-button cta-button--primary" to="/docs">
-              Read the documentation
-            </Link>
-            <Link className="cta-button" to="/docs/basics">
-              Start with the concepts
-            </Link>
-            <Link className="cta-button" to="/docs/findings">
-              The nine bugs it found
-            </Link>
+      <header className="hero shell">
+        <div className="hero__provenance"><span className="hero__identity"><FerriteAnimatedMark /><span>ferrite-lithic</span></span><a href={`${SOURCE_ROOT}README.md`}>Apache-2.0 / source & verification</a></div>
+        <div className="hero__inner page-grid">
+          <div className="hero__copy">
+            <h1 className="hero__title"><span>Hardware you write</span><span>in Rust, as real gates.</span></h1>
+            <p className="lede">An embedded hardware DSL, a cycle simulator and a Verilog emitter. Build one graph in Rust. Check that both backends agree on every clock edge.</p>
+            <div className="landing-cta"><Link className="cta-button cta-button--primary" to="/docs">Explore the toolchain</Link><Link className="cta-button" to="/docs/basics">Start with circuit basics →</Link></div>
+            <p className="hero__lineage">Hardcaml’s model, implemented natively in Rust.</p>
           </div>
+          <Hero />
+          <dl className="stats">
+            <Stat label="tests / recorded snapshot" value={PROJECT_STATS.tests} note="unit, integration and documentation tests" />
+            <Stat label="corpus algorithms" value={PROJECT_STATS.designs} note={`${PROJECT_STATS.tiers} tiers, ${PROJECT_STATS.checksPerDesign} complementary checks`} />
+            <Stat label="crates" value={PROJECT_STATS.crates} note="nine tools and one adversarial corpus" />
+            <Stat label="Verilator coverage" value={PROJECT_STATS.cosimCoverage} suffix="%" note="recorded corpus equivalence coverage" />
+          </dl>
         </div>
       </header>
 
-      <main>
+      <div className="landing-chapters">
         <section className="section" id="what">
           <h2>A library, not a language</h2>
           <div className="prose">
@@ -259,7 +238,7 @@ export default function Home() {
               <span className="dot" />
               <span className="code-panel__name">the whole shape of a design</span>
             </div>
-            <Code
+            <CodeBlock label="A design, two consumers"><Code
               source={`use ferrite_lithic::Design;
 
 let design = Design::new();
@@ -273,7 +252,7 @@ let out   = design.eq(&state, &target)?;
 // the two backends, from the same graph
 ferrite_lithic_sim::Sim::new(&design);   // cycle-accurate
 design.emit_verilog("top");              // structural`}
-            />
+            /></CodeBlock>
           </div>
         </section>
 
@@ -319,37 +298,20 @@ design.emit_verilog("top");              // structural`}
               the read.
             </p>
           </div>
+          <ol className="lineage-chain" aria-label="Ferrite’s architectural lineage">
+            <li><Link to="/docs/ocaml">OCaml</Link><p>A program constructs hardware, rather than describing its execution.</p></li>
+            <li><Link to="/docs/hardcaml">Hardcaml</Link><p>The graph, clock-edge model and explicit checks establish the contract.</p></li>
+            <li><Link to="/docs/why-rust">Ferrite / Rust</Link><p>Native ownership and error handling. Runtime widths, with verification doing the work.</p></li>
+          </ol>
         </section>
 
         <section className="section" id="crates">
           <h2>Ten crates, in dependency order</h2>
           <p className="prose">
-            Each one is small on purpose. The number is its test count, and the tier is the
-            phase that produced it.
+            Small crates with explicit contracts. Inspect the production dependencies, then
+            follow the walkthroughs in reading order. Test counts are the recorded snapshot.
           </p>
-          <ul className="crates">
-            {CRATES.map((crate) => (
-              <li className="crate" key={crate.name}>
-                <div className="crate__name">
-                  <span>{crate.name}</span>
-                  <span className="crate__count">{crate.tests}</span>
-                </div>
-                <p className="crate__what">{crate.what}</p>
-                <div className="crate__meta">
-                  <span className="crate__tier">
-                    {crate.tier === "—" ? "corpus" : `phase ${crate.tier}`}
-                  </span>
-                  <Link
-                    className="crate__read"
-                    to={`/docs/${DOC_SLUG[crate.name] ?? "bits"}`}
-                    aria-label={`Read the walkthrough for ${crate.name}`}
-                  >
-                    walkthrough
-                  </Link>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <CrateArchitecture />
         </section>
 
         <section className="section section--alt" id="corpus">
@@ -374,8 +336,9 @@ design.emit_verilog("top");              // structural`}
             </p>
           </div>
 
+          <VerificationLoop />
           <div className="tiers">
-            <h3>Seven tiers, twenty-one designs</h3>
+            <h3>{PROJECT_STATS.tiers} tiers, {PROJECT_STATS.designs} algorithms</h3>
             <ul className="tier-list">
               {TIERS.map((tier) => (
                 <li className="tier" key={tier.name}>
@@ -394,6 +357,7 @@ design.emit_verilog("top");              // structural`}
               ))}
             </ul>
           </div>
+          <p className="corpus__recurrence"><code>lfsr</code> is the shared reflected recurrence, not an additional corpus algorithm.</p>
 
           <div className="callout callout--loss">
             <h3>The honest benchmark: the CPU wins memchr, by 4.2×</h3>
@@ -404,7 +368,7 @@ design.emit_verilog("top");              // structural`}
               <strong>32 bytes per AVX2 instruction</strong>. That is the entire gap, and
               the argument for hardware is not that it wins here.
             </p>
-            <Bars />
+            <BenchmarkFigure />
             <p className="callout__foot">
               Across the corpus, two of five designs beat their reference implementation:{" "}
               <code>crc3</code> by 2.2× and <code>hex</code> by 1.4×. Both win by{" "}
@@ -424,7 +388,7 @@ design.emit_verilog("top");              // structural`}
         </section>
 
         <section className="section" id="bugs">
-          <h2>Four bugs, one shape</h2>
+          <h2>Defects that plausible answers hide</h2>
           <p className="prose">
             Every real defect this corpus has found looks the same: a constant that looks
             right, builds a graph of exactly the right width, and means the opposite of
@@ -445,7 +409,7 @@ design.emit_verilog("top");              // structural`}
               </p>
               <HexDiff />
               <div className="demo__foot">
-                A constant copied into both the code and its own test is not checked twice.
+                <Link to="/docs/findings#step-2">Read the FNV finding</Link>. A constant copied into both the code and its own test is not checked twice.
                 That is the whole lesson, and it cost one digit to learn.
               </div>
             </div>
@@ -485,7 +449,7 @@ design.emit_verilog("top");              // structural`}
         </section>
 
         <section className="section section--alt" id="gap">
-          <h2>The honest gap</h2>
+          <h2>The capability boundary</h2>
           <p className="prose">
             There is no initialised-memory node in the IR. <code>Design::mem</code> is
             zero-filled in both backends, so every lookup table in the corpus is a{" "}
@@ -497,7 +461,7 @@ design.emit_verilog("top");              // structural`}
             <figcaption className="demo__foot">
               <code>Design::rom(address, &amp;table, width)</code> builds exactly what a
               human would write with <code>case</code>: one arm per entry, emitting{" "}
-              <code>always @* case</code>. Watch a 256-entry table grow. A synthesis tool
+              <code>always @* case</code>. A 256-entry table is 256 case arms. A synthesis tool
               would infer block RAM from the same source in seconds — which is the point
               being recorded rather than hidden.
             </figcaption>
@@ -534,7 +498,7 @@ design.emit_verilog("top");              // structural`}
             </li>
           </ul>
         </section>
-      </main>
+      </div>
 
       <footer className="footer">
         <p>
@@ -542,76 +506,10 @@ design.emit_verilog("top");              // structural`}
           corpus that keeps finding bugs the tools' own tests could not.
         </p>
         <p className="footer__meta">
-          811 tests, 21 designs, 7 tiers, 10 crates. MIT-licensed dependencies audited with{" "}
+          {PROJECT_STATS.tests} tests, {PROJECT_STATS.designs} designs, {PROJECT_STATS.tiers} tiers, {PROJECT_STATS.crates} crates. MIT-licensed dependencies audited with{" "}
           <code>cargo deny</code>.
         </p>
       </footer>
     </>
   );
 }
-
-/**
- * The benchmark bars.
- *
- * Three rows, because the story is three rows: the two simulator timings that used to be
- * mistaken for hardware figures, and the real one. Log-scaled, since on a linear scale the
- * good rows are rounding errors — which is true, but reads as a broken chart.
- */
-function Bars() {
-  const [shown, setShown] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          observer.unobserve(node);
-          setShown(true);
-        }
-      },
-      { threshold: 0.4 },
-    );
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  const row = (label: string, value: string, width: number, loss?: boolean) => (
-    <div className={`bar${loss ? " bar--loss" : ""}`}>
-      <span className="bar__label">{label}</span>
-      <span className="bar__fill" style={{ width: shown ? `${width}%` : "0%" }} />
-      <span className="bar__value">{value}</span>
-    </div>
-  );
-
-  return (
-    <div className="bar-chart bar-chart--log" ref={ref}>
-      {row("crc3 design", "1.00 cyc/byte", 44)}
-      {row("crc crate", "2.24 ns/byte", 100, false)}
-      {row("memchr design", "1.01 cyc/byte", 45)}
-      {row("memchr crate", "0.24 ns/byte", 11)}
-      <p className="callout__foot">
-        One design that beats its reference implementation and one that does not, in the
-        units a ratio needs: clock edges against wall clock, read at a stated 1&nbsp;GHz.
-        The bottom row is the software being <em>beaten</em> — a general-purpose CRC
-        library paying for a three-bit result.
-      </p>
-    </div>
-  );
-}
-
-/** Crate name to page slug, so the crate list links to the right walkthrough. */
-const DOC_SLUG: Record<string, string> = {
-  "ferrite-lithic-bits": "bits",
-  "ferrite-lithic-ir": "ir",
-  "ferrite-lithic": "design",
-  "ferrite-lithic-sim": "sim",
-  "ferrite-lithic-rtl": "rtl",
-  "ferrite-lithic-derive": "derive",
-  "ferrite-lithic-wave": "wave",
-  "ferrite-lithic-cosim": "cosim",
-  "ferrite-lithic-tb": "tb",
-  "ferrite-lithic-corpus": "corpus",
-};

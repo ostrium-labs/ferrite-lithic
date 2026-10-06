@@ -3,12 +3,16 @@
  *
  * One component renders every page, whether the page is MDX or typed data. That is the
  * whole point: the sidebar, the step numbering, the figure treatment and the prev/next
- * pair are decided once here, so the fifteen pages cannot drift apart in structure even
+ * pair are decided once here, so all documentation pages cannot drift apart in structure even
  * though they are authored in two different formats.
  */
 
 import { Link } from "react-router";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+
+import { DOC_GROUPS, DOC_NAV } from "../content/navigation";
+import { DocRail } from "./DocRail";
+import { CodeBlock } from "./CodeBlock";
 
 import { mdxComponents } from "./mdx";
 import { BY_SLUG, DOCS, type DocEntry } from "../content/pages";
@@ -17,23 +21,28 @@ import type { Page } from "../content/types";
 /* -------------------------------------------------------------- doc chrome */
 
 function Sidebar({ current }: { current: string }) {
+  const disclosureRef = useRef<HTMLDetailsElement>(null);
+  useEffect(() => {
+    const media = globalThis.matchMedia("(min-width: 60.01rem)");
+    const sync = () => { if (disclosureRef.current) disclosureRef.current.open = media.matches; };
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, [current]);
   return (
     <nav className="sidebar" aria-label="Documentation">
-      <p className="sidebar__heading">Reading order</p>
-      <ol className="sidebar__list">
-        {DOCS.map((entry) => (
-          <li key={entry.slug} className="sidebar__item">
-            <Link
-              to={`/docs/${entry.slug}`}
-              className={`sidebar__link${entry.slug === current ? " is-current" : ""}`}
-              aria-current={entry.slug === current ? "page" : undefined}
-            >
-              {entry.title}
-            </Link>
-            {entry.crate ? <span className="sidebar__crate">{entry.crate}</span> : null}
-          </li>
-        ))}
-      </ol>
+      <details ref={disclosureRef} className="sidebar__disclosure" key={current} open>
+      <summary className="sidebar__summary">Documentation / {BY_SLUG.get(current)?.title}</summary>
+      <Link className="sidebar__index" to="/docs">Documentation / learning map</Link>
+      {DOC_GROUPS.map(group => <section className="sidebar__group" key={group.id}>
+        <h2 className="sidebar__heading">{group.title}</h2>
+        <ol className="sidebar__list">
+          {DOCS.filter(entry => group.sections.includes(entry.section)).map(entry => <li key={entry.slug} className="sidebar__item">
+            <Link to={`/docs/${entry.slug}`} className={`sidebar__link${entry.slug === current ? " is-current" : ""}`} aria-current={entry.slug === current ? "page" : undefined}>{entry.label}</Link>
+          </li>)}
+        </ol>
+      </section>)}
+      </details>
     </nav>
   );
 }
@@ -58,11 +67,11 @@ function Header({ entry }: { entry: DocEntry }) {
   return (
     <header className="doc-header">
       <Breadcrumb entry={entry} />
-      {entry.crate || entry.tier || entry.tests ? (
+      <p className="doc-header__location">{DOC_GROUPS.find(group => group.sections.includes(entry.section))?.title} / {entry.order + 1} of {DOCS.length}</p>
+      {entry.crate || entry.tests ? (
         <p className="doc-header__meta">
           {entry.crate ? <span className="doc-header__crate">{entry.crate}</span> : null}
-          {entry.tier ? <span>phase {entry.tier}</span> : null}
-          {entry.tests ? <span>{entry.tests} tests</span> : null}
+          {entry.tests ? <span>{entry.tests} tests / recorded snapshot</span> : null}
         </p>
       ) : null}
       <h1 className="doc-header__title">{entry.title}</h1>
@@ -70,49 +79,6 @@ function Header({ entry }: { entry: DocEntry }) {
         <p>{entry.description}</p>
       </div>
     </header>
-  );
-}
-
-/**
- * In-page contents. Steps really are a sequence, so numbering them is information.
- *
- * For a typed page the titles are already in the registry. For an MDX page they are not —
- * they live inside a Markdown file, and parsing that file at runtime to read them out would
- * mean shipping the source twice. So they are read back off the rendered DOM after mount
- * instead, which is one query and cannot disagree with what the reader can see.
- *
- * Rendered in the wrong order? No: the contents sits above the article in the markup, so it
- * is empty on the first paint and fills in immediately after. It is a navigation aid, and
- * arriving a frame late costs nothing.
- */
-function OnThisPage({ titles, articleRef }: { titles: string[]; articleRef: React.RefObject<HTMLElement | null> }) {
-  const [domTitles, setDomTitles] = useState<string[]>([]);
-
-  useEffect(() => {
-    const root = articleRef.current;
-    if (!root) return;
-    const found = Array.from(root.querySelectorAll<HTMLElement>(".step__title"))
-      .map((node) => node.textContent?.trim() ?? "")
-      .filter(Boolean);
-    setDomTitles(found);
-  }, [articleRef, titles]);
-
-  const resolved = titles.length > 0 ? titles : domTitles;
-  if (resolved.length === 0) return null;
-
-  return (
-    <nav className="onpage" aria-label="On this page">
-      <p className="onpage__heading">On this page</p>
-      <ol className="onpage__list">
-        {resolved.map((title, index) => (
-          <li key={`${index}-${title}`}>
-            <a className="onpage__link" href={`#step-${index + 1}`}>
-              {title}
-            </a>
-          </li>
-        ))}
-      </ol>
-    </nav>
   );
 }
 
@@ -125,15 +91,18 @@ function Pagination({ slug }: { slug: string }) {
     <nav className="doc-footer" aria-label="Pagination">
       {previous ? (
         <Link className="doc-footer__link doc-footer__link--prev" to={`/docs/${previous.slug}`}>
+          <span className="doc-footer__direction">← Previous</span>
           {previous.title}
         </Link>
       ) : (
         <Link className="doc-footer__link doc-footer__link--prev" to="/">
+          <span className="doc-footer__direction">← Previous</span>
           Landing page
         </Link>
       )}
       {next ? (
         <Link className="doc-footer__link doc-footer__link--next" to={`/docs/${next.slug}`}>
+          <span className="doc-footer__direction">Next →</span>
           {next.title}
         </Link>
       ) : null}
@@ -207,9 +176,7 @@ function renderPage(page: Page) {
                 </p>
                 {step.figure ? <Figure {...step.figure} /> : null}
                 {step.code ? (
-                  <div className="code-block">
-                    <pre>{step.code}</pre>
-                  </div>
+                  <CodeBlock><pre tabIndex={0}><code>{step.code}</code></pre></CodeBlock>
                 ) : null}
               </div>
             </li>
@@ -269,7 +236,7 @@ export function DocShell({ slug }: { slug: string }) {
 
   if (!entry) {
     return (
-      <main className="doc">
+      <main className="doc doc--error">
         <div className="doc__lede">
           <p className="eyebrow">404</p>
           <h1 className="doc-header__title">No page at /docs/{slug}</h1>
@@ -281,14 +248,13 @@ export function DocShell({ slug }: { slug: string }) {
     );
   }
 
-  const stepTitles = entry.page ? entry.page.steps.map((step) => step.title) : [];
 
   return (
     <div className="doc-layout">
       <Sidebar current={slug} />
-      <article className="doc" ref={articleRef}>
+      <article className="doc" ref={articleRef} key={slug}>
         <Header entry={entry} />
-        <OnThisPage titles={stepTitles} articleRef={articleRef} />
+        {entry.prerequisite ? <p className="doc__prerequisite">Builds on <Link to={`/docs/${entry.prerequisite}`}>{DOC_NAV.find(item => item.slug === entry.prerequisite)?.label}</Link></p> : null}
         {entry.kind === "mdx" && entry.Component ? (
           <entry.Component components={mdxComponents} />
         ) : entry.page ? (
@@ -296,6 +262,7 @@ export function DocShell({ slug }: { slug: string }) {
         ) : null}
         <Pagination slug={slug} />
       </article>
+      <DocRail key={`rail-${slug}`} articleRef={articleRef} entry={entry} />
     </div>
   );
 }

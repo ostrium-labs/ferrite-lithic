@@ -20,7 +20,7 @@ interface Node {
 }
 
 const NODES: Node[] = [
-  { x: 20, y: 96, w: 150, h: 74, title: "Rust builder", sub: "Design::sll(…)", tint: palette.accent3 },
+  { x: 20, y: 96, w: 150, h: 74, title: "Rust builder", sub: "Design::sll(…)", tint: palette.accent },
   { x: 214, y: 96, w: 168, h: 74, title: "Design", sub: "nodes + widths", tint: palette.accent },
   {
     x: 426,
@@ -47,18 +47,18 @@ const NODES: Node[] = [
     y: 96,
     w: 178,
     h: 74,
-    title: "Plan + Stimulus",
-    sub: "same columns",
-    tint: palette.warn,
+    title: "Compare inputs",
+    sub: "Plan + stimulus",
+    tint: palette.accent,
   },
   {
     x: 1064,
     y: 96,
     w: 118,
     h: 74,
-    title: "equivalent?",
-    sub: "or first diff",
-    tint: palette.good,
+    title: "Result",
+    sub: "match/diff",
+    tint: palette.accent,
   },
 ];
 
@@ -73,21 +73,12 @@ const EDGES: [number, number][] = [
   [6, 7],
 ];
 
-/** A cubic curve from the right edge of one node to the left edge of another. */
-function edgePath(from: Node, to: Node): string {
-  const x0 = from.x + from.w;
-  const y0 = from.y + from.h / 2;
-  const x1 = to.x;
-  const y1 = to.y + to.h / 2;
-  const bend = Math.max(30, (x1 - x0) * 0.55);
-  return `M ${x0} ${y0} C ${x0 + bend} ${y0}, ${x1 - bend} ${y1}, ${x1} ${y1}`;
-}
-
 export function drawPipeline(
   context: CanvasRenderingContext2D,
   width: number,
   height: number,
   elapsed: number,
+  selected: number | null = null,
 ): void {
   context.fillStyle = palette.bg;
   context.fillRect(0, 0, width, height);
@@ -96,7 +87,9 @@ export function drawPipeline(
   context.save();
   context.scale(scale, scale);
   const w = 1200;
-  const h = 420;
+  const h = 300;
+  const downstream = new Set<number>(selected === null ? NODES.map((_, index) => index) : [selected]);
+  for (const [from, to] of EDGES) if (downstream.has(from)) downstream.add(to);
 
   // The pulse travels left to right; each edge gets its own offset so the whole graph
   // reads as one signal rather than eight independent ones.
@@ -106,9 +99,9 @@ export function drawPipeline(
   for (const [index, [fromIndex, toIndex]] of EDGES.entries()) {
     const from = NODES[fromIndex];
     const to = NODES[toIndex];
-    const path = edgePath(from, to);
 
-    context.strokeStyle = palette.line;
+
+    context.strokeStyle = selected !== null && downstream.has(fromIndex) ? palette.accent : palette.line;
     context.lineWidth = 2;
     context.beginPath();
     context.moveTo(from.x + from.w, from.y + from.h / 2);
@@ -144,22 +137,21 @@ export function drawPipeline(
       context.fill();
       context.globalAlpha = 1;
     }
-    void path;
+
   }
 
   // ---- nodes
   for (const [index, node] of NODES.entries()) {
-    // A slow breathing highlight on the graph's source, so there is a visual clock.
-    const phase = Math.sin((elapsed / 700) + index * 0.4) * 0.5 + 0.5;
+    const phase = downstream.has(index) ? 1 : 0;
 
     context.fillStyle = palette.panel;
-    roundRect(context, node.x, node.y, node.w, node.h, 10);
+    roundRect(context, node.x, node.y, node.w, node.h, 2);
     context.fill();
 
     context.strokeStyle = node.tint;
     context.globalAlpha = 0.35 + phase * 0.5;
     context.lineWidth = 1.6;
-    roundRect(context, node.x, node.y, node.w, node.h, 10);
+    roundRect(context, node.x, node.y, node.w, node.h, 2);
     context.stroke();
     context.globalAlpha = 1;
 
@@ -168,14 +160,14 @@ export function drawPipeline(
     roundRect(context, node.x, node.y, 4, node.h, 2);
     context.fill();
 
-    context.font = `600 14px ${MONO}`;
+    context.font = `600 16px ${MONO}`;
     context.fillStyle = palette.ink;
     context.textAlign = "left";
     context.textBaseline = "middle";
     context.fillText(node.title, node.x + 16, node.y + node.h / 2 - 9);
 
-    context.font = `11px ${MONO}`;
-    context.fillStyle = palette.inkFaint;
+    context.font = `14px ${MONO}`;
+    context.fillStyle = palette.inkDim;
     context.fillText(node.sub, node.x + 16, node.y + node.h / 2 + 11);
   }
 
@@ -183,15 +175,15 @@ export function drawPipeline(
   const checkPhase = ((elapsed / 1400) % 1);
   const check = NODES[7];
   const sweeping = checkPhase < 0.5;
-  context.strokeStyle = sweeping ? palette.good : palette.line;
+  context.strokeStyle = sweeping ? palette.accent : palette.line;
   context.lineWidth = sweeping ? 2 : 1.2;
-  roundRect(context, check.x, check.y, check.w, check.h, 10);
+  roundRect(context, check.x, check.y, check.w, check.h, 2);
   context.stroke();
 
   // A scan line across the comparison box, so "checked every cycle" is visible.
   if (sweeping) {
     const scanX = check.x + ((checkPhase / 0.5) * check.w);
-    context.strokeStyle = palette.good;
+    context.strokeStyle = palette.accent;
     context.globalAlpha = 0.6;
     context.lineWidth = 1.5;
     context.beginPath();
@@ -202,17 +194,17 @@ export function drawPipeline(
   }
 
   // ---- the legend: what the two branches are for
-  context.font = `11px ${MONO}`;
-  context.fillStyle = palette.inkFaint;
+  context.font = `14px ${MONO}`;
+  context.fillStyle = palette.inkDim;
   context.textAlign = "left";
   context.fillText(
-    "the simulator is what the tests believe; Verilator is what a synthesiser would run",
+    "Same graph. Same columns. Same stimulus.",
     20,
     h - 22,
   );
   context.textAlign = "right";
-  context.fillStyle = palette.inkFaint;
-  context.fillText("one graph, two consumers, one arbiter", w - 20, h - 22);
+  context.fillStyle = palette.inkDim;
+  context.fillText("Illustrative propagation / not a live test", w - 20, h - 22);
 
   context.restore();
   void height;

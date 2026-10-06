@@ -134,7 +134,7 @@ the two agree. This project adds a third consumer and makes disagreement a build
 
 - **A generated cosimulation driver** compared **after the clock edge** (ADR-0018), so the
   comparison happens at the instant both backends agree is settled.
-- **A golden model in the corpus**: every one of the 21 designs is checked against the
+- **A golden model in the corpus**: every one of the <ProjectCount name="designs" /> designs is checked against the
   original Rust crate it reimplements, as well as through a step testbench and against
   Verilator.
 - **A CI rule that a green run with skips is a failure.** Verilator and Icarus are looked

@@ -1,3 +1,6 @@
+import { CodeBlock } from "./CodeBlock";
+import { BenchmarkTable } from "./BenchmarkFigure";
+import { PROJECT_STATS } from "../lib/data";
 /**
  * The components MDX pages are written in.
  *
@@ -152,10 +155,10 @@ export function Gotcha({ title, children }: { title: string; children?: ReactNod
 /** A short definition, for the terms a beginner has to have before the rest makes sense. */
 export function Def({ term, children }: { term: string; children?: ReactNode }) {
   return (
-    <div className="def">
+    <dl className="def">
       <dt className="def__term">{term}</dt>
       <dd className="def__body">{children}</dd>
-    </div>
+    </dl>
   );
 }
 
@@ -168,7 +171,7 @@ export function Compare({
   rows: [string, string, string][];
 }) {
   return (
-    <div className="table-wrap">
+    <div className="table-wrap" tabIndex={0} role="region" aria-label="Scrollable comparison table">
       <table className="compare">
         <thead>
           <tr>
@@ -193,6 +196,8 @@ export function Compare({
 
 /** The map the MDX runtime is given, so prose elements are styled without a wrapper. */
 export const mdxComponents = {
+  ProjectCount: ({ name }: { name: "designs" | "tests" | "crates" | "tiers" }) => <>{PROJECT_STATS[name]}</>,
+  BenchmarkTable,
   Steps,
   Step,
   Figure,
@@ -203,6 +208,6 @@ export const mdxComponents = {
   h1: (props: React.ComponentProps<"h1">) => <h1 className="doc-header__title" {...props} />,
   h2: (props: React.ComponentProps<"h2">) => <h2 className="doc__h2" {...props} />,
   h3: (props: React.ComponentProps<"h3">) => <h3 className="doc__h3" {...props} />,
-  pre: (props: React.ComponentProps<"pre">) => <pre className="mdx-pre" {...props} />,
-  table: (props: React.ComponentProps<"table">) => <table className="compare" {...props} />,
+  pre: (props: React.ComponentProps<"pre">) => <CodeBlock><pre className="mdx-pre" tabIndex={0} {...props} /></CodeBlock>,
+  table: (props: React.ComponentProps<"table">) => <div className="table-wrap" tabIndex={0} role="region" aria-label="Scrollable comparison table"><table className="compare" {...props} /></div>,
 } as const;

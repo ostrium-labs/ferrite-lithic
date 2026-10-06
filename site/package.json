@@ -8,10 +8,12 @@
     "build": "react-router build",
     "start": "wrangler dev",
     "deploy": "wrangler deploy",
-    "preview": "vite preview",
-    "typecheck": "react-router typegen && tsc"
+    "preview": "wrangler dev --local",
+    "typecheck": "react-router typegen && tsc",
+    "test": "node ticker.test.mjs && node demos.test.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@types/node": "^26.6.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

@@ -56,10 +56,10 @@ function label(
   x: number,
   y: number,
   color: string,
-  size = 12,
+  size = 15,
   align: CanvasTextAlign = "left",
 ): void {
-  context.font = `${size}px ${MONO}`;
+  context.font = `${Math.max(14, size)}px ${MONO}`;
   context.fillStyle = color;
   context.textAlign = align;
   context.textBaseline = "middle";
@@ -96,12 +96,12 @@ export function drawBitStream(
   const regY = height / 2 - 26;
   const cell = 30;
 
-  label(context, "staging register", regX, regY - 26, palette.inkFaint, 11);
+  label(context, "staging register", regX, regY - 26, palette.inkDim, 11);
 
   const byte = bytes[loadedByte] ?? 0;
   for (let position = 7; position >= 0; position -= 1) {
     const x = regX + (7 - position) * (cell + 6);
-    const isOut = position >= bitsLeft;
+    const isOut = withinByte === 0 || position < withinByte - 1;
     const bit = ((byte >> position) & 1) === 1;
 
     context.fillStyle = isOut ? palette.panel : bit ? palette.accent : palette.line;
@@ -120,7 +120,7 @@ export function drawBitStream(
       isOut ? "·" : String(position),
       x + cell / 2,
       regY + cell / 2,
-      isOut ? palette.inkFaint : bit ? palette.bg : palette.inkDim,
+      isOut ? palette.inkDim : bit ? palette.bg : palette.inkDim,
       13,
       "center",
     );
@@ -131,7 +131,7 @@ export function drawBitStream(
   // first: an arrow on the far side would be a picture of the opposite order.
   const regRight = regX + 8 * (cell + 6) - 6;
   const pulse = withinByte === 0 ? 0 : 1 - (withinByte - 1) / DEFLATE_CYCLES_PER_BYTE;
-  const outBit = bitsLeft < 8 ? ((byte >> bitsLeft) & 1) === 1 : false;
+  const outBit = withinByte > 0 && ((byte >> (withinByte - 1)) & 1) === 1;
 
   context.strokeStyle = palette.accent2;
   context.globalAlpha = 0.25 + pulse * 0.6;
@@ -151,7 +151,7 @@ export function drawBitStream(
     withinByte === 0 ? "" : outBit ? "1" : "0",
     regRight + 51,
     regY + cell / 2,
-    withinByte === 0 ? palette.inkFaint : pulse > 0.05 ? palette.bg : palette.inkFaint,
+    withinByte === 0 ? palette.inkDim : pulse > 0.05 ? palette.bg : palette.inkDim,
     13,
     "center",
   );
@@ -159,7 +159,7 @@ export function drawBitStream(
 
   // The stream itself, one box per byte, filling in as it is consumed.
   const streamY = height - 74;
-  label(context, "stream, least significant bit of each byte first", regX, streamY - 24, palette.inkFaint, 11);
+  label(context, "stream, least significant bit of each byte first", regX, streamY - 24, palette.inkDim, 11);
 
   for (let index = 0; index < bytes.length; index += 1) {
     const x = regX + index * 20;
@@ -173,10 +173,10 @@ export function drawBitStream(
 
     if (loaded) {
       // Fill from the low bit upwards: the order the reader takes them in.
-      const emitted = index < loadedByte ? 8 : Math.max(0, 8 - bitsLeft);
+      const emitted = index < loadedByte ? 8 : withinByte === 0 ? 0 : withinByte - 1;
       for (let bit = 0; bit < emitted; bit += 1) {
         const on = ((bytes[index] >> bit) & 1) === 1;
-        context.fillStyle = on ? palette.accent : palette.inkFaint;
+        context.fillStyle = on ? palette.accent : palette.inkDim;
         context.fillRect(x + 2, streamY + 32 - bit * 4, 12, 3);
       }
     }
@@ -191,9 +191,9 @@ export function drawBitStream(
   context.fill();
   context.stroke();
 
-  label(context, "cycle", panelX + 14, 44, palette.inkFaint, 11);
+  label(context, "cycle", panelX + 14, 44, palette.inkDim, 11);
   label(context, String(cycle), panelX + 172, 44, palette.ink, 13, "right");
-  label(context, "bits_left", panelX + 14, 66, palette.inkFaint, 11);
+  label(context, "bits_left", panelX + 14, 66, palette.inkDim, 11);
   label(
     context,
     String(bitsLeft),
@@ -203,23 +203,23 @@ export function drawBitStream(
     13,
     "right",
   );
-  label(context, "in_ready", panelX + 14, 88, palette.inkFaint, 11);
+  label(context, "in_ready", panelX + 14, 88, palette.inkDim, 11);
   label(
     context,
     bitsLeft === 0 ? "1" : "0",
     panelX + 172,
     88,
-    bitsLeft === 0 ? palette.good : palette.inkFaint,
+    bitsLeft === 0 ? palette.accent : palette.inkDim,
     13,
     "right",
   );
 
   label(
     context,
-    "nine cycles per byte: eight to shift the bits out, one to take the next byte",
+    "9 cycles / byte: 8 shift edges + 1 load edge",
     regX,
     height - 16,
-    palette.inkFaint,
+    palette.inkDim,
     11,
   );
 }
@@ -258,6 +258,11 @@ function huffmanMessage(): { symbols: number[]; bits: boolean[] } {
   return { symbols, bits };
 }
 
+const HUFFMAN_TABLE = decodeTable();
+const HUFFMAN_MESSAGE = huffmanMessage();
+const HUFFMAN_BITS = HUFFMAN_MESSAGE.bits;
+const HUFFMAN_OFFSETS = HUFFMAN_MESSAGE.symbols.map((_, index) => HUFFMAN_MESSAGE.symbols.slice(0, index).reduce((sum, symbol) => sum + canonicalCodes(fixedLiteralLengthLengths())[symbol].length, 0));
+
 export function drawHuffman(
   context: CanvasRenderingContext2D,
   width: number,
@@ -267,19 +272,19 @@ export function drawHuffman(
   context.fillStyle = palette.bg;
   context.fillRect(0, 0, width, height);
 
-  const table = decodeTable();
-  const { bits } = huffmanMessage();
+  const table = HUFFMAN_TABLE;
+  const bits = HUFFMAN_BITS;
 
   // One symbol every 900ms, with the lookup landing in the middle of its window so the
   // nine-bit peek is visible before the answer is.
   const window = 900;
-  const step = Math.floor(elapsed / window) % bits.length;
+  const step = Math.floor(elapsed / window) % HUFFMAN_OFFSETS.length;
   const phase = (elapsed % window) / window;
 
-  const peekStart = Math.min(step, Math.max(0, bits.length - 1));
+  const peekStart = HUFFMAN_OFFSETS[step];
   const peekBits: boolean[] = [];
   for (let offset = 0; offset < TABLE_BITS; offset += 1) {
-    peekBits.push(bits[(peekStart + offset) % bits.length]);
+    peekBits.push(bits[peekStart + offset] ?? false);
   }
 
   // Stream order: bit 0 is the code's most significant bit, because a Huffman code is
@@ -293,7 +298,7 @@ export function drawHuffman(
 
   // ---- the arriving bits
   const streamY = 46;
-  label(context, "bit buffer, arriving at the low end", 30, streamY - 22, palette.inkFaint, 11);
+  label(context, "bit buffer, arriving at the low end", 30, streamY - 22, palette.inkDim, 11);
 
   const cell = 34;
   const gap = 6;
@@ -318,12 +323,12 @@ export function drawHuffman(
       14,
       "center",
     );
-    label(context, `b${position}`, x + cell / 2, streamY + cell + 14, palette.inkFaint, 9, "center");
+    label(context, `b${position}`, x + cell / 2, streamY + cell + 14, palette.inkDim, 9, "center");
   }
 
   // ---- the reversal
   const arrowY = streamY + cell + 44;
-  context.strokeStyle = palette.accent3;
+  context.strokeStyle = palette.accent2;
   context.lineWidth = 1.5;
   context.setLineDash([4, 4]);
   context.beginPath();
@@ -336,7 +341,7 @@ export function drawHuffman(
     "reverse: b0 is the code's most significant bit",
     30,
     arrowY,
-    palette.accent3,
+    palette.accent2,
     11,
   );
 
@@ -351,14 +356,14 @@ export function drawHuffman(
     context.fill();
     label(context, bit ? "1" : "0", x + indexCell / 2, indexY + 13, bit ? palette.bg : palette.inkDim, 12, "center");
   }
-  label(context, "table index", 30 + (TABLE_BITS * (indexCell + 5)) + 14, indexY + 13, palette.inkFaint, 11);
+  label(context, "table index", 30 + (TABLE_BITS * (indexCell + 5)) + 14, indexY + 13, palette.inkDim, 11);
 
   // ---- the table, with the selected row lit
   const tableX = width - 232;
   const tableY = 40;
   const rowsShown = 9;
   const rowH = 18;
-  label(context, "512-entry decode table", tableX, tableY - 16, palette.inkFaint, 11);
+  label(context, "512-entry decode table", tableX, tableY - 16, palette.inkDim, 11);
 
   const firstRow = Math.max(0, Math.min(index - 4, TABLE_ENTRIES - rowsShown));
   for (let row = 0; row < rowsShown; row += 1) {
@@ -368,7 +373,7 @@ export function drawHuffman(
     context.fillStyle = hit ? palette.accent : palette.panel;
     roundRect(context, tableX, y, 200, rowH - 3, 3);
     context.fill();
-    label(context, String(rowIndex), tableX + 8, y + (rowH - 3) / 2, hit ? palette.bg : palette.inkFaint, 10);
+    label(context, String(rowIndex), tableX + 8, y + (rowH - 3) / 2, hit ? palette.bg : palette.inkDim, 10);
     label(
       context,
       table[rowIndex].length === 0 ? "no code" : `sym ${table[rowIndex].symbol}`,
@@ -382,7 +387,7 @@ export function drawHuffman(
       table[rowIndex].length === 0 ? "" : `${table[rowIndex].length} bits`,
       tableX + 192,
       y + (rowH - 3) / 2,
-      hit ? palette.bg : palette.inkFaint,
+      hit ? palette.bg : palette.inkDim,
       10,
       "right",
     );
@@ -391,32 +396,32 @@ export function drawHuffman(
   // ---- the answer
   const answerY = indexY + 66;
   const answered = phase > 0.62;
-  context.strokeStyle = answered ? palette.good : palette.line;
+  context.strokeStyle = answered ? palette.accent : palette.line;
   context.lineWidth = 1.5;
-  roundRect(context, 30, answerY, 300, 44, 8);
+  roundRect(context, 30, answerY, 440, 44, 2);
   context.stroke();
 
-  label(context, "out_valid", 44, answerY + 15, palette.inkFaint, 10);
-  label(context, answered ? "1" : "0", 108, answerY + 15, answered ? palette.good : palette.inkFaint, 12, "right");
+  label(context, "out_valid", 44, answerY + 15, palette.inkDim, 10);
+  label(context, answered ? "1" : "0", 150, answerY + 15, answered ? palette.accent : palette.inkDim, 12, "right");
 
-  label(context, "symbol", 150, answerY + 15, palette.inkFaint, 10);
+  label(context, "symbol", 190, answerY + 15, palette.inkDim, 10);
   label(
     context,
     answered ? String(entry.symbol) : "—",
-    214,
+    280,
     answerY + 15,
-    answered ? palette.accent : palette.inkFaint,
+    answered ? palette.accent : palette.inkDim,
     12,
     "right",
   );
 
-  label(context, "code_len", 236, answerY + 15, palette.inkFaint, 10);
+  label(context, "code_len", 320, answerY + 15, palette.inkDim, 10);
   label(
     context,
     answered ? String(entry.length) : "—",
-    316,
+    450,
     answerY + 15,
-    answered ? palette.accent : palette.inkFaint,
+    answered ? palette.accent : palette.inkDim,
     12,
     "right",
   );
@@ -426,7 +431,7 @@ export function drawHuffman(
     `fixed literal/length code from RFC 1951 §3.2.6 · entry ${index}`,
     30,
     height - 16,
-    palette.inkFaint,
+    palette.inkDim,
     11,
   );
 }
