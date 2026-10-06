@@ -33,7 +33,7 @@ Generated files under `public/brand/`:
 
 - `ferrite-mark-primary.svg`, `ferrite-mark-inverse.svg`, `ferrite-mark-mono.svg`, `ferrite-mark-mono-inverse.svg`
 - `ferrite-logo-primary.svg`, `ferrite-logo-inverse.svg`, `ferrite-logo-mono.svg`, `ferrite-logo-mono-inverse.svg`, `ferrite-logo-stacked.svg`
-- `avatar.svg`
+- `avatar.svg`, `readme-banner.svg` (1400 × 300)
 - `favicon-16.png`, `favicon-32.png`, `favicon-48.png`
 - `apple-touch-icon.png` (180px), `icon-192.png`, `icon-512.png`
 - `og-ferrite.png` (1200x630)
@@ -50,7 +50,7 @@ Generated files under `public/brand/`:
 - `root.tsx`: imports brand CSS, links SVG/PNG favicon and touch icon, and supplies shared OG/Twitter image metadata. Existing route titles/descriptions remain intact.
 - `layout.css`: removes obsolete `.sitebar__mark` rules.
 - `site/README.md`: links the brand guide and brand verification command.
-- No changes to repository README branding or external profiles. Portable assets are ready for later use.
+- The repository README uses the vector banner from `readme-banner.svg`; the export script derives its outlined wordmark and mark from the canonical sources. No external profiles were changed.
 
 ## Validation and screenshots
 

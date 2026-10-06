@@ -9,7 +9,7 @@ export const MARK = {
 /** Same skeleton snapped to whole pixels, with thicker terminals at 16px. */
 export const MICRO_MARK = {
   viewBox: '0 0 16 16',
-  branch: 'M13 3 H9 L7 5 V11 L9 13 H13',
+  branch: 'M13 3 H7 V13 H13',
   input: { x: 1, y: 7, width: 6, height: 2 },
   upper: { x: 12, y: 1, width: 3, height: 3 },
   lower: { x: 12, y: 12, width: 3, height: 3 },

@@ -1,6 +1,8 @@
 Ferrite Lithic
 ==============
 
+![ferrite-lithic — Hardware you write in Rust, as real gates](site/public/brand/readme-banner.svg)
+
 An embedded hardware DSL, a cycle simulator, and an RTL generator, in Rust.
 
 Hardcaml's model, reimplemented natively. Not a wrapper, not a binding, not a
@@ -40,7 +42,7 @@ emitter's contract and the port-list rule are in `docs/design-notes.md`, the
 nineteen accepted decisions are in `docs/adr/`, and `DETAILS.md` is the single
 place everything known lives.
 
-The documentation site is in [`site/`](site/). Fifteen pages in reading order:
+The documentation site is in [`site/`](site/). Sixteen pages in reading order:
 the background a hardware DSL needs, the OCaml and Hardcaml lineage this is a port
 of, an honest accounting of what Rust's type system does and does not check, and
 then the nine crates bottom-up. It is a React Router app with Fumadocs MDX as the
