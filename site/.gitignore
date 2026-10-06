@@ -28,3 +28,4 @@ dist-ssr
 /build
 /.react-router
 /.cache
+/.wrangler

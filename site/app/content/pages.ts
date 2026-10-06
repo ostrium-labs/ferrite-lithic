@@ -18,6 +18,7 @@
 
 import { TOOLCHAIN } from "./toolchain";
 import { CORPUS, FINDINGS } from "./corpus";
+import { MDX_SLUGS } from "./paths";
 import type { ComponentType } from "react";
 
 import type { Page } from "./types";
@@ -53,7 +54,7 @@ export interface DocEntry {
  */
 const MDX_PAGES: DocEntry[] = [
   {
-    slug: "basics",
+    slug: MDX_SLUGS.basics,
     title: "How a circuit becomes a value",
     description: "Combinational and sequential logic, clock edges, bit order, and what equivalence checking actually proves.",
     order: 10,
@@ -61,7 +62,7 @@ const MDX_PAGES: DocEntry[] = [
     Component: Basics,
   },
   {
-    slug: "ocaml",
+    slug: MDX_SLUGS.ocaml,
     title: "OCaml, and the idea of a hardware DSL",
     description: "The three ways to write hardware, what a hardware construction language is, and which OCaml features carry weight.",
     order: 20,
@@ -69,7 +70,7 @@ const MDX_PAGES: DocEntry[] = [
     Component: Ocam,
   },
   {
-    slug: "hardcaml",
+    slug: MDX_SLUGS.hardcaml,
     title: "Hardcaml, the design being ported",
     description: "Signal.t, Reg_spec, wire and feedback, Cyclesim, ppx interfaces — and the three checks inherited verbatim.",
     order: 30,
@@ -77,7 +78,7 @@ const MDX_PAGES: DocEntry[] = [
     Component: HardcamlPage,
   },
   {
-    slug: "why-rust",
+    slug: MDX_SLUGS.whyRust,
     title: "Why Rust, honestly",
     description: "What the type system does not check, where compile-time width checking was traded away, and what actually verifies the design.",
     order: 40,
@@ -115,7 +116,7 @@ export const DOCS: DocEntry[] = [
   fromData(FINDINGS, 210),
   // Reference, read last: it measures the corpus rather than explaining it.
   {
-    slug: "benchmarks",
+    slug: MDX_SLUGS.benchmarks,
     title: "Benchmarks, measured",
     description: "Node counts, flops, bits of state and combinational depth for every design, derived from the IR rather than estimated.",
     order: 220,

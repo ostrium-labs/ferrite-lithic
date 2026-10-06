@@ -56,6 +56,40 @@ npm run start      # serve the build
 npm run typecheck  # react-router typegen && tsc
 ```
 
+## Cloudflare Workers deployment
+
+The build prerenders the landing page, documentation index, and every documentation
+slug into `build/client`. `wrangler.jsonc` deploys these as static assets to the
+`ferrite` Worker; no runtime server is required. Documentation paths are shared with
+the page registry in `app/content/paths.ts`. Add new MDX slugs there as well as their
+registry entries; crate walkthrough paths come from the typed page objects.
+
+Connect `ostrium-labs/ferrite-lithic` in Cloudflare Workers Builds with:
+
+| Setting | Value |
+|---|---|
+| Production branch | `dev` |
+| Root directory | `site` |
+| Build command | `npm run build` |
+| Deploy command | `npx wrangler deploy` |
+| Build token | Existing `ostrium build token`, if it permits deploying `ferrite` |
+
+The committed npm lockfile selects npm for dependency installation. Enable automatic
+builds on pushes to the production branch. The token needs permission to edit Workers
+in the target account; read-only access cannot create the Worker or its build connection.
+
+For a local preview or authenticated manual deployment:
+
+```sh
+npm ci
+npm run build
+npm run start     # preview with Workers static asset routing
+npm run deploy    # requires Cloudflare write access
+```
+
+After the first successful deployment, add `ferrite.ostriumlabs.org` under the Worker's
+Settings → Domains & Routes → Add → Custom Domain in Cloudflare.
+
 ## Verifying
 
 `verify.mjs` drives a real browser over every route and asserts the things that are easy to

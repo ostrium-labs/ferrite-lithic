@@ -1,4 +1,5 @@
 import type { Config } from "@react-router/dev/config";
+import { DOC_PATHS } from "./app/content/paths";
 
 /**
  * React Router 8, framework mode.
@@ -8,11 +9,12 @@ import type { Config } from "@react-router/dev/config";
  * document. The URLs are unchanged in shape — `/docs/sim` rather than `/docs/sim.html` —
  * so a link written for the previous build still resolves.
  *
- * `ssr: true` with everything prerendered: the documentation is fully static, which is
+ * Every route is prerendered: the documentation is fully static, which is
  * what makes it indexable and linkable. The animated parts are effects, so they only ever
  * run in the browser and the prerendered HTML is complete without them.
  */
 export default {
-  ssr: true,
+  ssr: false,
+  prerender: ["/", "/docs", ...DOC_PATHS],
   appDirectory: "app",
 } satisfies Config;

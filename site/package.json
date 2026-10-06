@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "react-router dev",
     "build": "react-router build",
-    "start": "react-router-serve ./build/server/index.js",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
     "preview": "vite preview",
     "typecheck": "react-router typegen && tsc"
   },
@@ -16,7 +17,8 @@
     "@types/react-dom": "^19.3.0",
     "playwright-core": "^1.63.0",
     "typescript": "~6.0.2",
-    "vite": "^8.3.0"
+    "vite": "^8.3.0",
+    "wrangler": "^4.147.0"
   },
   "description": "Animated explainer for Ferrite Lithic, an embedded hardware DSL in Rust.",
   "dependencies": {
